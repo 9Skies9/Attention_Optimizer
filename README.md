@@ -18,15 +18,15 @@ This repo runs that experiment.
 
 ## Core Question
 
-Can **attention over recent gradient history** replace or augment Adam's first-moment EMA on GPT pretraining — and if so, does selective gradient aggregation outperform fixed exponential averaging?
+Can **attention over recent gradient history** replace or augment Adam's first-moment EMA on GPT pretraining, and if so, does selective gradient aggregation outperform fixed exponential averaging?
 
 ---
 
 ## Test Bed
 
-The model under test is **Karpathy's nanoGPT** (GPT-2), extended with the incremental architecture and training improvements documented in the [nanoGPT community discussion #481](https://github.com/karpathy/nanochat/discussions/481). Pre-training runs on HuggingFace's **[FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb)** dataset — a large, deduplicated, high-quality English web corpus.
+The model under test is **Karpathy's nanoGPT** (GPT-2), extended with the incremental architecture and training improvements documented in the [nanoGPT community discussion #481](https://github.com/karpathy/nanochat/discussions/481). Pre-training runs on HuggingFace's **[FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb)** dataset.
 
-Everything is held constant across runs — model, data, training recipe — and only the optimizer varies. The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validation loss at a fixed token budget.
+The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validation loss at a fixed token budget.
 
 ---
 
