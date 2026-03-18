@@ -1,28 +1,16 @@
-# Attention Optimizer
-
 ## Motivation
 
 Two things collided to start this project.
 
-First, the Kimi team published [**Attention Residuals**](https://arxiv.org/abs/2603.15031) (arXiv 2603.15031) — showing that replacing fixed residual connections with attention-based aggregation, where each layer selectively pulls from earlier representations with learned input-dependent weights, improves both training stability and downstream performance at scale. The core insight is that selective, learned aggregation over a history of representations is strictly more expressive than a fixed weighted sum.
+First, the Kimi team published [**Attention Residuals**](https://arxiv.org/abs/2603.15031) (arXiv 2603.15031), showing that replacing fixed residual connections with attention-based aggregation improves both training stability and downstream performance at scale.
 
 Second, Andrej Karpathy asked whether **stochastic gradient descent could be replicated by attention**:
 
-![Karpathy tweet](kaparthy.png)
+![Karpathy tweet](assets/kaparthy.png)
 
-That question stuck. And when looking at Adam more carefully, something jumps out: the **first moment EMA** is structurally identical to the bottleneck in a sequential modeling network. It compresses the entire gradient history into a single exponentially decayed running average — a fixed, non-selective summary. That is exactly the kind of bottleneck that attention was designed to remove in sequence models.
+When looking at Adam more carefully, I thought the **first moment EMA** is structurally identical to the bottleneck in a sequential modeling network. It compresses the entire gradient history into a single exponentially decayed running average, kinda like a hidden state of sequential networks.
 
-So the question became: **what if we replaced Adam's EMA with attention over the current gradient and a short window of past gradients?** Instead of fixed exponential decay blending everything by recency, attention selectively weights which past gradient steps are most relevant to the current one — the same way transformers selectively pull from context rather than compressing it into a hidden state.
-
-This repo runs that experiment.
-
----
-
-## Test Bed
-
-The model under test is **Karpathy's nanoGPT** (GPT-2), extended with the incremental architecture and training improvements documented in the [nanoGPT community discussion #481](https://github.com/karpathy/nanochat/discussions/481). Pre-training runs on HuggingFace's **[FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb)** dataset — a large, deduplicated, high-quality English web corpus.
-
-Everything is held constant across runs — model, data, training recipe — and only the optimizer varies. The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validation loss at a fixed token budget.
+So, instead of forcing optimization history through a single EMA bottleneck, can we let the optimizer use attention to attend over recent gradient history and decide what matters?
 
 ---
 
@@ -85,6 +73,14 @@ g_{t-1} … g_{t-K} ── stats ──────┘
                                   │
                          θ ← θ - lr · m̃ / (√v̂ + ε)
 ```
+
+---
+
+## Test Bed
+
+The model under test is **Karpathy's nanoGPT** (GPT-2), extended with the incremental architecture and training improvements documented in the [nanoGPT community discussion #481](https://github.com/karpathy/nanochat/discussions/481). Pre-training runs on HuggingFace's **[FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb)** dataset.
+
+The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validation loss at a fixed token budget.
 
 ---
 
