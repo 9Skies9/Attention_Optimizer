@@ -25,41 +25,11 @@ Adam's update rule uses an EMA of gradients as its first moment:
 
 $$m_t = \beta_1 \, m_{t-1} + (1 - \beta_1) \, g_t$$
 
-AttnOpt replaces that fixed decay with a learned, selective attention over a sliding window of recent gradients.
+AttnOpt replaces that fixed decay with a learned, selective attention over a sliding window of recent gradients:
 
-**Normalize the gradient:**
+$$m_t = \sum_{i=0}^{K-1} \alpha_i \,\hat{g}_{t-i}, \qquad \alpha = \text{softmax}\!\left(\frac{q_t K^\top}{\sqrt{d}}\right)$$
 
-$$\hat{g}_t = \frac{g_t}{\text{RMS}(g_t)}, \qquad \text{RMS}(g_t) = \sqrt{\frac{1}{n}\sum_i g_{t,i}^2}$$
-
-**Extract per-step features** (mean, second moment, L1 norm of $\hat{g}_t$) and concatenate with a recency positional embedding $p_i \in \mathbb{R}^{d_\text{pos}}$:
-
-$$x_i = \bigl[\,\mathbb{E}[\hat{g}_i],\; \mathbb{E}[\hat{g}_i^2],\; \mathbb{E}[|\hat{g}_i|],\; p_i\,\bigr] \in \mathbb{R}^{3 + d_\text{pos}}$$
-
-**Project to queries and keys:**
-
-$$q_t = x_t W_Q, \qquad k_i = x_i W_K, \qquad i \in \{t, t{-}1, \ldots, t{-}K{+}1\}$$
-
-**Compute attention weights over the gradient window:**
-
-$$\alpha = \text{softmax}\!\left(\frac{q_t K^\top}{\sqrt{d_\text{head}}}\right) \in \mathbb{R}^K$$
-
-**Attended first moment:**
-
-$$m_\text{attn} = \sum_{i=0}^{K-1} \alpha_i \,\hat{g}_{t-i}$$
-
-**Second moment (unchanged from Adam):**
-
-$$v_t = \beta_2 v_{t-1} + (1 - \beta_2)\, g_t^2, \qquad \hat{v}_t = \frac{v_t}{1 - \beta_2^t}$$
-
-**Parameter update — pure mode** (attention fully replaces EMA):
-
-$$\theta_{t+1} = \theta_t - \eta \cdot \frac{m_\text{attn}}{\sqrt{\hat{v}_t} + \varepsilon}$$
-
-**Parameter update — gated mode** (attention blends with EMA):
-
-$$\tilde{m} = (1 - \lambda)\,m_\text{EMA} + \lambda\, m_\text{attn}$$
-
-$$\theta_{t+1} = \theta_t - \eta \cdot \frac{\tilde{m}}{\sqrt{\hat{v}_t} + \varepsilon}$$
+where $\hat{g}_{t-i}$ are RMS-normalized gradients, and queries and keys are projections of per-step gradient statistics.
 
 ---
 
