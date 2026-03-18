@@ -8,5 +8,4 @@ logs/
 checkpoints/
 data/.cache/
 analysis/.ipynb_checkpoints/
-*.png
 wandb/
