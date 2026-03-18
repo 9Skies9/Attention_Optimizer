@@ -6,10 +6,9 @@ First, Attention Residuals￼ showed that replacing fixed residual connections w
 
 - <img src="assets/residuals.png" width="200"/>
 
+Second, Andrej Karpathy's question whether stochastic gradient descent could also use attention in it:
 
-- Second, Andrej Karpathy's question whether stochastic gradient descent could also use attention in it:
-
-<img src="assets/kaparthy.png" width="400"/>
+- <img src="assets/kaparthy.png" width="400"/>
 
 
 That made me look at Adam’s first-moment EMA differently: it compresses gradient history into a single exponentially decayed running average, much like a hidden state bottleneck in sequential models.
