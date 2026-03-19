@@ -12,7 +12,6 @@ That made me look at Adam’s first-moment EMA differently: it compresses gradie
 
 So the question becomes: instead of forcing optimization history through one EMA, can an optimizer use attention to attend over recent gradients and decide what matters?
 
----
 
 ## AttnOpt: Attention as a First Moment
 
@@ -49,7 +48,6 @@ Training budget: ~`1.07B` tokens per run (`4,096` steps × `262,144` tokens/step
 | `ATTN-GATED-8-TRAIN` | `0.5 × EMA + 0.5 × attention`, context window 8 |
 | `ATTN-GATED-16-TRAIN` | `0.5 × EMA + 0.5 × attention`, context window 16 |
 
----
 
 ## Results
 
