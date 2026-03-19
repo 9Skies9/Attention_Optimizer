@@ -29,11 +29,10 @@ $$q_t=x_tW_Q,\qquad k_{t-i}=x_{t-i}W_K,\qquad i\in{0,\dots,L-1}$$
 $$\alpha=\mathrm{softmax}\!\left(\left[\frac{q_tk_t^\top}{\sqrt{d}},\frac{q_tk_{t-1}^\top}{\sqrt{d}},\dots,\frac{q_tk_{t-L+1}^\top}{\sqrt{d}}\right]\right)$$
 
 
----
-
 ## Testing
 
-The model under test is **Karpathy's nanoGPT** (GPT-2), extended with the incremental architecture and training improvements documented in the [nanoGPT community discussion #481](https://github.com/karpathy/nanochat/discussions/481). Pre-training runs on HuggingFace's **[FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb)** dataset.
+- Architecture:  Karpathy's nanoGPT architecture (with the improvements documented in [here](https://github.com/karpathy/nanochat/discussions/481))
+- Pre-training dataset: HuggingFace's [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset
 
 The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validation loss at a fixed token budget.
 
