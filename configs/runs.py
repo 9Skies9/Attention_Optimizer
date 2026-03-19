@@ -30,17 +30,6 @@ RUNS = {
             "gate_value": 1.0,
         },
     },
-    "ATTN-PURE-16-TRAIN": {
-        "optimizer": "attnopt",
-        "lr": 3e-4,
-        "weight_decay": 0.1,
-        "attnopt_config": {
-            "moment_mode": "pure",
-            "context_length": 16,
-            "trainable_attn": True,
-            "gate_value": 1.0,
-        },
-    },
     "ATTN-GATED-8-TRAIN": {
         "optimizer": "attnopt",
         "lr": 3e-4,
@@ -48,17 +37,6 @@ RUNS = {
         "attnopt_config": {
             "moment_mode": "gated",
             "context_length": 8,
-            "trainable_attn": True,
-            "gate_value": 0.5,
-        },
-    },
-    "ATTN-GATED-16-TRAIN": {
-        "optimizer": "attnopt",
-        "lr": 3e-4,
-        "weight_decay": 0.1,
-        "attnopt_config": {
-            "moment_mode": "gated",
-            "context_length": 16,
             "trainable_attn": True,
             "gate_value": 0.5,
         },

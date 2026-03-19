@@ -12,9 +12,7 @@ RUN_IDS=(
     BASE-ADAMW
     BASE-MUON
     ATTN-PURE-8-TRAIN
-    ATTN-PURE-16-TRAIN
     ATTN-GATED-8-TRAIN
-    ATTN-GATED-16-TRAIN
 )
 
 echo "Starting sequential training of ${#RUN_IDS[@]} runs..."

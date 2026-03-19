@@ -38,14 +38,14 @@ The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validati
 
 | ID | Optimizer |
 |---|---|
+| ID | Optimizer |
+|---|---|
 | `BASE-SGD` | SGD + momentum |
 | `BASE-ADAM` | Adam |
 | `BASE-ADAMW` | AdamW |
 | `BASE-MUON` | Muon |
 | `ATTN-PURE-8-TRAIN` | attention replaces EMA, context window 8 |
-| `ATTN-PURE-16-TRAIN` | attention replaces EMA, context window 16 |
 | `ATTN-GATED-8-TRAIN` | `0.5 × EMA + 0.5 × attention`, context window 8 |
-| `ATTN-GATED-16-TRAIN` | `0.5 × EMA + 0.5 × attention`, context window 16 |
 
 
 ## Results
