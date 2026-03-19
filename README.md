@@ -4,7 +4,7 @@
 
 - <img src="assets/residuals.png" width="200"/>
 
-Andrej Karpathy's followed up with a thought whether stochastic gradient descent could also use attention in it:
+Andrej Karpathy's followed up with a [thought](https://x.com/karpathy/status/2033400893346107835) whether stochastic gradient descent could also use attention in it:
 
 - <img src="assets/kaparthy.png" width="400"/>
 
