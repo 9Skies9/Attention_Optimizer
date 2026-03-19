@@ -35,6 +35,7 @@ The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validati
 - Architecture:  Karpathy's nanoGPT architecture (with the improvements documented in [here](https://github.com/karpathy/nanochat/discussions/481))
 - Pre-training dataset: HuggingFace's [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset
 - Training budget: ~`1.07B` tokens per run (`4,096` steps × `262,144` tokens/step).
+- The AttnOpt has a context window of 8 for past gradients.
 
 | ID | Optimizer |
 |---|---|
@@ -42,8 +43,8 @@ The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validati
 | `BASE-ADAM` | Adam |
 | `BASE-ADAMW` | AdamW |
 | `BASE-MUON` | Muon |
-| `ATTN-PURE-8` | attention replaces EMA, context window 8 (Past Gradients) |
-| `ATTN-GATED-8` | `0.5 × EMA + 0.5 × attention`, context window 8 (Past Gradients) |
+| `ATTN-PURE-8` | attention replaces EMA |
+| `ATTN-GATED-8` | half attention, half EMA |
 
 
 ## Results
