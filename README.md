@@ -38,8 +38,6 @@ The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validati
 
 | ID | Optimizer |
 |---|---|
-| ID | Optimizer |
-|---|---|
 | `BASE-SGD` | SGD + momentum |
 | `BASE-ADAM` | Adam |
 | `BASE-ADAMW` | AdamW |
