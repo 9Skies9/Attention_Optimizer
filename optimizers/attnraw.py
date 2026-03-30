@@ -33,11 +33,12 @@ class AttnRaw(Optimizer):
         self,
         params,
         lr=3e-4,
-        betas=(0.9, 0.95),
+        betas=(0.9, 0.999),
         eps=1e-8,
         weight_decay=0.0,
         context_length=8,
-        mix_beta=0.5,
+        mix_beta=0.9,
+        raw_second_moment=False,
     ):
         if context_length < 1:
             raise ValueError("context_length must be >= 1")
@@ -49,6 +50,7 @@ class AttnRaw(Optimizer):
             weight_decay=weight_decay,
             context_length=context_length,
             mix_beta=mix_beta,
+            raw_second_moment=raw_second_moment,
         )
         super().__init__(params, defaults)
 
@@ -85,6 +87,7 @@ class AttnRaw(Optimizer):
             wd = group["weight_decay"]
             K = group["context_length"]
             mix_beta = group["mix_beta"]
+            raw_v = group["raw_second_moment"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -111,7 +114,8 @@ class AttnRaw(Optimizer):
                 m_tilde = m_type1.reshape_as(p)
 
                 v = state["exp_avg_sq"]
-                v.mul_(beta2).addcmul_(m_tilde, m_tilde, value=1.0 - beta2)
+                v_input = g if raw_v else m_tilde
+                v.mul_(beta2).addcmul_(v_input, v_input, value=1.0 - beta2)
                 v_hat = v / (1.0 - beta2 ** t)
 
                 state["grad_history"] = (

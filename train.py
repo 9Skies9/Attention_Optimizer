@@ -1,7 +1,7 @@
 # train.py
 #
 # Platform-agnostic training entry point.
-# Usage: python train.py --run_id BASE-ADAMW
+# Usage: python train.py --run_id ATTNRAW-8
 #
 # Works on Vast.ai, Lambda Labs, RunPod, or any local GPU.
 
@@ -9,15 +9,19 @@ import argparse
 import json
 import math
 import os
+import random
 import time
 
+import numpy as np
 import torch
+from tqdm import tqdm
 
 from configs.runs import RUNS, TRAIN_CONFIG, MODEL_CONFIG
 from data.fineweb import get_dataloader
 from model.gpt import GPT, GPTConfig
 from optimizers.muon import Muon
-from optimizers.attnopt import AttnOpt
+from optimizers.attnraw import AttnRaw
+from optimizers.avg import Avg
 
 
 # ------------------------------------------------------------------ #
@@ -86,11 +90,41 @@ def build_optimizer(model, run_cfg):
     elif opt_name == "muon":
         return Muon(model.parameters(), lr=lr, weight_decay=wd)
 
-    elif opt_name == "attnopt":
-        acfg = run_cfg["attnopt_config"]
+    elif opt_name == "avg":
+        scfg = run_cfg["avg_config"]
+
+        # Embeddings are excluded from history-based methods: too sparse and
+        # memory-costly to store gradient history for a 50k-vocab table.
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+
+        avg_opt = Avg(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=scfg["context_length"],
+            mix_beta=scfg.get("mix_beta", 0.9),
+            raw_second_moment=scfg.get("raw_second_moment", False),
+        )
+        embed_opt = torch.optim.AdamW(
+            embed_params, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=wd,
+        )
+        return CombinedOptimizer([avg_opt, embed_opt])
+
+    elif opt_name == "attnraw":
+        acfg = run_cfg["attnraw_config"]
 
         # Split parameters: embedding → AdamW (sparse, huge),
-        # everything else → AttnOpt (per-element attention).
+        # everything else → AttnOpt (tensorwise Type 1 attention).
         # Handle weight tying: wte.weight == lm_head.weight, deduplicate by id.
         embed_ids = {id(model.wte.weight)}
         embed_params, other_params = [], []
@@ -104,13 +138,13 @@ def build_optimizer(model, run_cfg):
             else:
                 other_params.append(p)
 
-        attn_opt = AttnOpt(
+        attn_opt = AttnRaw(
             other_params,
             lr=lr,
             weight_decay=wd,
             context_length=acfg["context_length"],
-            moment_mode=acfg["moment_mode"],
-            gate_value=acfg["gate_value"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            raw_second_moment=acfg.get("raw_second_moment", False),
         )
         embed_opt = torch.optim.AdamW(
             embed_params, lr=lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=wd,
@@ -131,9 +165,14 @@ def train(run_id: str):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.environ.setdefault("FINEWEB_MAX_SHARDS", "10")
 
-    torch.manual_seed(tcfg["seed"])
+    seed = tcfg["seed"]
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     if device == "cuda":
-        torch.cuda.manual_seed(tcfg["seed"])
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     # ---- Model ----
     model = build_model(run_cfg)
@@ -173,6 +212,7 @@ def train(run_id: str):
     step = 0
     t0 = time.time()
 
+    pbar = tqdm(total=max_steps, desc=run_id, unit="step")
     while step < max_steps:
         # ---- LR schedule ----
         lr = cosine_schedule(step, warmup_steps, max_steps, max_lr, min_lr)
@@ -204,6 +244,7 @@ def train(run_id: str):
         optimizer.step()
 
         # ---- Logging ----
+        pbar.update(1)
         if step % log_interval == 0 and step > 0:
             dt = time.time() - t0
             tokens_per_sec = (
@@ -217,13 +258,12 @@ def train(run_id: str):
             }
             log_file.write(json.dumps(log) + "\n")
             log_file.flush()
-            print(
-                f"[{run_id}] step {step:5d} | loss {accum_loss:.4f} | "
-                f"lr {lr:.2e} | {tokens_per_sec/1e3:.1f}k tok/s"
-            )
+            pbar.set_postfix(loss=f"{accum_loss:.4f}", lr=f"{lr:.2e}", tok_s=f"{tokens_per_sec/1e3:.1f}k")
             t0 = time.time()
 
         step += 1
+
+    pbar.close()
 
     # ---- Save checkpoint ----
     os.makedirs(ckpt_dir, exist_ok=True)

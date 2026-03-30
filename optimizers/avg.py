@@ -1,9 +1,10 @@
 #
 # Sliding-window average optimizer.
 #
-# Replaces Adam's first-moment EMA with a literal average over the most recent
-# K gradients, while keeping Adam's second moment, epsilon, and decoupled weight
-# decay behavior.
+# Replaces Adam's first-moment EMA with a weighted mix of the current gradient
+# and the uniform average of the most recent K past gradients:
+#
+#   m_t = (1 - mix_beta) * g_t + mix_beta * mean(g_{t-1}, ..., g_{t-K})
 
 import torch
 from torch.optim import Optimizer
@@ -11,25 +12,23 @@ from torch.optim import Optimizer
 
 class Avg(Optimizer):
     """
-    Adam-like optimizer with a sliding-window first moment.
+    Adam-like optimizer with a weighted history first moment.
 
-    The first-moment term is the uniform average of the current gradient and the
-    most recent K-1 stored gradients for each parameter tensor:
+        m_t = (1 - mix_beta) * g_t + mix_beta * mean(g_{t-1}, ..., g_{t-K})
 
-        m_t = (1 / L) * sum_{i=0}^{L-1} g_{t-i}
-
-    where L is the number of available history entries up to context_length.
-    The second-moment path remains identical to Adam.
+    The second moment tracks the variance of m_t, not the raw gradient.
     """
 
     def __init__(
         self,
         params,
         lr=3e-4,
-        betas=(0.9, 0.95),
+        betas=(0.9, 0.999),
         eps=1e-8,
         weight_decay=0.0,
         context_length=8,
+        mix_beta=0.9,
+        raw_second_moment=False,
     ):
         if context_length < 1:
             raise ValueError("context_length must be >= 1")
@@ -40,6 +39,8 @@ class Avg(Optimizer):
             eps=eps,
             weight_decay=weight_decay,
             context_length=context_length,
+            mix_beta=mix_beta,
+            raw_second_moment=raw_second_moment,
         )
         super().__init__(params, defaults)
 
@@ -62,6 +63,8 @@ class Avg(Optimizer):
             eps = group["eps"]
             wd = group["weight_decay"]
             K = group["context_length"]
+            mix_beta = group["mix_beta"]
+            raw_v = group["raw_second_moment"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -75,11 +78,16 @@ class Avg(Optimizer):
                 state["step"] += 1
                 t = state["step"]
 
-                history = [g] + state["grad_history"][: K - 1]
-                m_tilde = torch.stack(history, dim=0).mean(dim=0)
+                past = state["grad_history"][:K]
+                if past:
+                    m_past = torch.stack(past, dim=0).mean(dim=0)
+                    m_tilde = (1.0 - mix_beta) * g + mix_beta * m_past
+                else:
+                    m_tilde = g
 
                 v = state["exp_avg_sq"]
-                v.mul_(beta2).addcmul_(m_tilde, m_tilde, value=1.0 - beta2)
+                v_input = g if raw_v else m_tilde
+                v.mul_(beta2).addcmul_(v_input, v_input, value=1.0 - beta2)
                 v_hat = v / (1.0 - beta2 ** t)
 
                 state["grad_history"] = (

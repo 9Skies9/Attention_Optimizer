@@ -1,3 +1,5 @@
+sshkey*
+*.pub
 .DS_Store
 __pycache__/
 *.pyc
@@ -9,3 +11,5 @@ checkpoints/
 data/.cache/
 analysis/.ipynb_checkpoints/
 wandb/
+.claude/
+.claude/

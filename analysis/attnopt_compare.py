@@ -6,12 +6,11 @@ import sys
 import types
 
 import torch
-import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model.gpt import GPT, GPTConfig
-from optimizers.attnopt import AttnOpt
+from optimizers.attnraw import AttnRaw
 
 
 def set_seed(seed: int):
@@ -45,21 +44,24 @@ def build_dataset(num_examples: int, seq_len: int, vocab_size: int):
     return torch.stack(xs), torch.stack(ys)
 
 
-def instrument_attnopt(optimizer: AttnOpt):
-    original = optimizer._compute_attn_weights
+def instrument_attnraw(optimizer: AttnRaw):
+    original = optimizer._compute_past_mix
 
-    def wrapped(self, query_stats, all_stats, n_heads):
-        alpha = original(query_stats, all_stats, n_heads)
+    def wrapped(self, g_flat, history):
+        current_norm = g_flat.norm().clamp(min=1e-8)
+        history_norms = history.norm(dim=1).clamp(min=1e-8)
+        scores = (history @ g_flat) / (history_norms * current_norm)
+        alpha = torch.softmax(scores, dim=0)
         entropy = -(alpha.clamp_min(1e-9) * alpha.clamp_min(1e-9).log()).sum()
         self._last_attn_stats = {
-            "slot_count": int(all_stats.shape[0]),
+            "slot_count": int(history.shape[0]),
             "alpha": alpha.detach().cpu(),
             "entropy": float(entropy.detach().cpu()),
             "max_weight": float(alpha.max().detach().cpu()),
         }
-        return alpha
+        return original(g_flat, history)
 
-    optimizer._compute_attn_weights = types.MethodType(wrapped, optimizer)
+    optimizer._compute_past_mix = types.MethodType(wrapped, optimizer)
 
 
 def train(model, optimizer, x_all, y_all, steps: int, batch_size: int):
@@ -106,7 +108,7 @@ def summarize_attn_stats(stats):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tiny CPU AdamW vs AttnOpt comparison.")
+    parser = argparse.ArgumentParser(description="Tiny CPU AdamW vs AttnRaw comparison.")
     parser.add_argument("--steps", type=int, default=120)
     parser.add_argument("--batch_size", type=int, default=8)
     args = parser.parse_args()
@@ -121,15 +123,14 @@ def main():
     attnopt_model = copy.deepcopy(base_model)
 
     adam = torch.optim.AdamW(adam_model.parameters(), lr=1e-3)
-    attnopt = AttnOpt(
+    attnopt = AttnRaw(
         attnopt_model.parameters(),
         lr=1e-3,
         weight_decay=0.0,
         context_length=8,
-        n_heads=1,
-        trainable_attn=True,
+        mix_beta=0.6,
     )
-    instrument_attnopt(attnopt)
+    instrument_attnraw(attnopt)
 
     adam_losses, _ = train(adam_model, adam, x_all, y_all, steps=args.steps, batch_size=args.batch_size)
     attnopt_losses, attn_stats = train(
@@ -148,7 +149,7 @@ def main():
 
     summary = summarize_attn_stats(attn_stats)
     if summary is not None:
-        print("\nAttnOpt Attention Summary")
+        print("\nAttnRaw Attention Summary")
         print(f"mean_entropy={summary['mean_entropy']:.4f}")
         print(f"mean_max_weight={summary['mean_max_weight']:.4f}")
         print(f"last_slot_count={summary['last_slot_count']}")

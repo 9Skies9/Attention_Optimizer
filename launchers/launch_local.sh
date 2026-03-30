@@ -9,10 +9,11 @@ set -e
 RUN_IDS=(
     BASE-SGD
     BASE-ADAM
-    BASE-ADAMW
     BASE-MUON
-    ATTN-PURE-8-TRAIN
-    ATTN-GATED-8-TRAIN
+    AVG-8
+    AVG-8R
+    ATTNRAW-8
+    ATTNRAW-8R
 )
 
 echo "Starting sequential training of ${#RUN_IDS[@]} runs..."

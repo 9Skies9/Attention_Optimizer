@@ -10,33 +10,48 @@ RUNS = {
         "optimizer": "adam",
         "lr": 3e-4,
     },
-    "BASE-ADAMW": {
-        "optimizer": "adamw",
-        "lr": 3e-4,
-        "weight_decay": 0.1,
-    },
     "BASE-MUON": {
         "optimizer": "muon",
         "lr": 3e-4,
     },
-    "ATTN-PURE-8-TRAIN": {
-        "optimizer": "attnopt",
+    "AVG-8": {
+        "optimizer": "avg",
         "lr": 3e-4,
-        "weight_decay": 0.1,
-        "attnopt_config": {
-            "moment_mode": "pure",
+        "weight_decay": 0.0,
+        "avg_config": {
             "context_length": 8,
-            "gate_value": 1.0,
+            "mix_beta": 0.9,
+            "raw_second_moment": False,
         },
     },
-    "ATTN-GATED-8-TRAIN": {
-        "optimizer": "attnopt",
+    "AVG-8R": {
+        "optimizer": "avg",
         "lr": 3e-4,
-        "weight_decay": 0.1,
-        "attnopt_config": {
-            "moment_mode": "gated",
+        "weight_decay": 0.0,
+        "avg_config": {
             "context_length": 8,
-            "gate_value": 0.5,
+            "mix_beta": 0.9,
+            "raw_second_moment": True,
+        },
+    },
+    "ATTNRAW-8": {
+        "optimizer": "attnraw",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "attnraw_config": {
+            "context_length": 8,
+            "mix_beta": 0.9,
+            "raw_second_moment": False,
+        },
+    },
+    "ATTNRAW-8R": {
+        "optimizer": "attnraw",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "attnraw_config": {
+            "context_length": 8,
+            "mix_beta": 0.9,
+            "raw_second_moment": True,
         },
     },
 }

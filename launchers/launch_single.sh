@@ -9,9 +9,8 @@ if [ -z "$1" ]; then
     echo "Usage: bash launchers/launch_single.sh <RUN_ID>"
     echo ""
     echo "Available run IDs:"
-    echo "  Baselines: BASE-SGD BASE-ADAM BASE-ADAMW BASE-MUON"
-    echo "  AttnOpt:   ATTN-PURE-8-TRAIN ATTN-PURE-16-TRAIN"
-    echo "             ATTN-GATED-8-TRAIN ATTN-GATED-16-TRAIN"
+    echo "  Baselines: BASE-SGD BASE-ADAM BASE-MUON"
+    echo "  History:   AVG-8 AVG-8R ATTNRAW-8 ATTNRAW-8R"
     exit 1
 fi
 

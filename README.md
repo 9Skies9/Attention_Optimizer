@@ -12,45 +12,48 @@ That made me look at Adam’s first-moment EMA differently: it compresses gradie
 
 So the question becomes: instead of forcing optimization history through one EMA, can an optimizer use attention to attend over recent gradients and decide what matters?
 
-
-## AttnOpt: Attention as a First Moment
+## AttnOpt: Tensorwise History Mixing
 
 Adam's update rule uses an EMA of gradients as its first moment:
 
 $$m_t = \beta_1 \ m_{t-1} + (1 - \beta_1) \, g_t$$
 
-AttnOpt replaces that fixed decay with a learned, selective attention over a sliding window of the last $L$ gradients:
+AttnOpt replaces that fixed decay with a learned, selective attention for each layer $\ell$ over a sliding window of the last $L$ gradients:
 
-$$m_t=\sum_{i=0}^{L-1}\alpha_i\cdot g_{t-i}$$
+$$m_t^{(\ell)} = \beta^{(\ell)}\, g_t^{(\ell)} + \left(1-\beta^{(\ell)}\right)\sum_{i=1}^{L-1}\alpha_i^{(\ell)}\, g_{t-i}^{(\ell)}$$
+$$\alpha^{(\ell)}=\operatorname{softmax}\!\left(\left[s_1^{(\ell)},\,s_2^{(\ell)},\,\dots,\,s_{L-1}^{(\ell)}\right]\right)$$
+$$s_i^{(\ell)}=\frac{q_t^{(\ell)}{k_{t-i}^{(\ell)}}^\top}{\sqrt{d_\ell}}, \qquad i\in\{1,\dots,L-1\}$$
+$$q_t^{(\ell)} = g_t^{(\ell)} W_Q^{(\ell)}, \qquad k_{t-i}^{(\ell)} = g_{t-i}^{(\ell)} W_K^{(\ell)}, \qquad i \in \{1,\dots,L-1\}$$
 
-$$\alpha=\mathrm{softmax}\left(\left[\frac{q_tk_t^\top}{\sqrt{d}},\frac{q_tk_{t-1}^\top}{\sqrt{d}},\dots,\frac{q_tk_{t-L+1}^\top}{\sqrt{d}}\right]\right)$$
+We will also have a no parameters baseline for testing raw attention scores from cosine similarity over raw gradient history:
 
-$$q_t=g_tW_Q,\qquad k_{t-i}=g_{t-i}W_K,\qquad i\in\{0,\dots,L-1\}$$
-
+$$s_i^{(\ell)} = \cos\!\left(g_t^{(\ell)},\, g_{t-i}^{(\ell)}\right), \qquad i \in \{1,\dots,L-1\}$$
 
 ## Testing
 
-The goal is to see whether AttnOpt can match or beat Adam/AdamW/Muon on validation loss at a fixed token budget.
+
+The goal is to see whether AttnOpt can match or beat SGD, Adam, Muon, and a sliding-average history baseline on validation loss at a fixed token budget.
+
+Currently we will test on LLMs, if it seems promising we might test other fields as well.
 
 - Architecture:  Karpathy's nanoGPT architecture (with the improvements documented in [here](https://github.com/karpathy/nanochat/discussions/481))
 - Pre-training dataset: HuggingFace's [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset
 - Training budget: ~`1.07B` tokens per run (`4,096` steps × `262,144` tokens/step).
-- The AttnOpt has a context window of 8 for past gradients.
+- All history-based runs look back `8` gradients.
 
-| ID | Optimizer |
-|---|---|
-| `BASE-SGD` | SGD + momentum |
-| `BASE-ADAM` | Adam |
-| `BASE-ADAMW` | AdamW |
-| `BASE-MUON` | Muon |
-| `ATTN-PURE-8` | attention replaces EMA |
-| `ATTN-GATED-8` | half attention, half EMA |
-
+| ID           | First moment (m̃)                 | Second moment (v tracks EMA of…) |
+| ------------ | --------------------------------- | -------------------------------- |
+| `BASE-SGD`   | —                                 | —                                |
+| `BASE-ADAM`  | g_t                               | g_t²                             |
+| `BASE-MUON`  | —                                 | —                                |
+| `AVG-8`      | 0.1·g_t + 0.9·mean(past 8)        | m̃²                              |
+| `AVG-8R`     | 0.1·g_t + 0.9·mean(past 8)        | g_t²                             |
+| `ATTNRAW-8`  | 0.1·g_t + 0.9·cosine-attn(past 8) | m̃²                              |
+| `ATTNRAW-8R` | 0.1·g_t + 0.9·cosine-attn(past 8) | g_t²                             |
+| `ATTNOPT-8`  | —                                 | —                                |
 
 ## Results
 
 Loss curves compared in `analysis/results.ipynb`.
-
-### Baselines
 
 ![Baseline loss curves](assets/baseline_loss.png)

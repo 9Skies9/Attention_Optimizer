@@ -5,12 +5,11 @@ import sys
 import types
 
 import torch
-import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from model.gpt import GPT, GPTConfig
-from optimizers.attnopt import AttnOpt
+from optimizers.attnraw import AttnRaw
 
 
 def set_seed(seed: int):
@@ -38,24 +37,27 @@ def build_tiny_gpt(vocab_size: int = 64, seq_len: int = 16):
     )
 
 
-def instrument_attnopt(optimizer: AttnOpt):
-    original = optimizer._compute_attn_weights
+def instrument_attnraw(optimizer: AttnRaw):
+    original = optimizer._compute_past_mix
 
-    def wrapped(self, query_stats, all_stats, n_heads):
-        alpha = original(query_stats, all_stats, n_heads)
+    def wrapped(self, g_flat, history):
+        current_norm = g_flat.norm().clamp(min=1e-8)
+        history_norms = history.norm(dim=1).clamp(min=1e-8)
+        scores = (history @ g_flat) / (history_norms * current_norm)
+        alpha = torch.softmax(scores, dim=0)
         self._last_alpha = alpha.detach().cpu()
-        self._last_query_stats = query_stats.detach().cpu()
-        self._last_slot_count = int(all_stats.shape[0])
-        return alpha
+        self._last_query = g_flat.detach().cpu()
+        self._last_slot_count = int(history.shape[0])
+        return original(g_flat, history)
 
-    optimizer._compute_attn_weights = types.MethodType(wrapped, optimizer)
+    optimizer._compute_past_mix = types.MethodType(wrapped, optimizer)
 
 
 def run_history_probe():
     set_seed(13)
     p = torch.nn.Parameter(torch.zeros(4, 4))
-    opt = AttnOpt([p], lr=1e-1, context_length=4, n_heads=1, trainable_attn=True)
-    instrument_attnopt(opt)
+    opt = AttnRaw([p], lr=1e-1, context_length=4, mix_beta=0.6)
+    instrument_attnraw(opt)
 
     grads = [
         torch.full_like(p, 1.0),
@@ -104,15 +106,14 @@ def run_overfit(steps: int):
     attnopt_model = build_tiny_gpt(vocab_size=vocab_size, seq_len=seq_len)
 
     adam = torch.optim.AdamW(adam_model.parameters(), lr=1e-3)
-    attnopt = AttnOpt(
+    attnopt = AttnRaw(
         attnopt_model.parameters(),
         lr=1e-3,
         weight_decay=0.0,
         context_length=8,
-        n_heads=1,
-        trainable_attn=True,
+        mix_beta=0.6,
     )
-    instrument_attnopt(attnopt)
+    instrument_attnraw(attnopt)
 
     adam_losses = train_model(adam_model, adam, x, y, steps=steps)
     attnopt_losses = train_model(attnopt_model, attnopt, x, y, steps=steps)
@@ -121,11 +122,11 @@ def run_overfit(steps: int):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Toy CPU diagnostics for AttnOpt.")
+    parser = argparse.ArgumentParser(description="Toy CPU diagnostics for AttnRaw.")
     parser.add_argument("--steps", type=int, default=30, help="Toy overfit steps per optimizer.")
     args = parser.parse_args()
 
-    print("AttnOpt History Probe")
+    print("AttnRaw History Probe")
     for row in run_history_probe():
         print(
             f"step={row['step']} slots={row['slot_count']} "
