@@ -22,7 +22,7 @@ from model.gpt import GPT, GPTConfig
 from optimizers.muon import Muon
 from optimizers.attnraw import AttnRaw
 from optimizers.avg import Avg
-from optimizers.attnema import AttnEMA
+from optimizers.attnraw_v2 import AttnRawV2
 
 
 # ------------------------------------------------------------------ #
@@ -167,7 +167,7 @@ def build_optimizer(model, run_cfg):
         )
         return CombinedOptimizer([attn_opt, embed_opt])
 
-    elif opt_name == "attnema":
+    elif opt_name == "attnraw_v2":
         ecfg = run_cfg["attnema_config"]
 
         embed_ids = {id(model.wte.weight)}
@@ -182,7 +182,7 @@ def build_optimizer(model, run_cfg):
             else:
                 other_params.append(p)
 
-        attnema_opt = AttnEMA(
+        attnema_opt = AttnRawV2(
             other_params,
             lr=lr,
             weight_decay=wd,

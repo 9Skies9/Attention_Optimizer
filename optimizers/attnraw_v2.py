@@ -1,12 +1,12 @@
 #
-# AttnEMA: Attention over gradient window + EMA on top.
+# AttnRaw V2: Attention over gradient window + EMA on top.
 #
 # Instead of replacing Adam's EMA entirely, attention produces a smarter
-# instantaneous signal a_t, and EMA smooths over it:
+# instantaneous signal m_tilde, and EMA smooths over it:
 #
-#   a_t = cosine-attention([g_t, g_{t-1}, ..., g_{t-L+1}])
-#   m_t = beta1 * m_{t-1} + (1 - beta1) * a_t
-#   v_t = beta2 * v_{t-1} + (1 - beta2) * a_t^2
+#   m_tilde = cosine-attention([g_t, g_{t-1}, ..., g_{t-L+1}])
+#   m_t = beta1 * m_{t-1} + (1 - beta1) * m_tilde
+#   v_t = beta2 * v_{t-1} + (1 - beta2) * m_tilde^2
 #   theta -= lr * (m_t / (1 - beta1^t)) / (sqrt(v_t / (1 - beta2^t)) + eps)
 #
 # g_t is included in the attention window so attention can decide how much
@@ -17,9 +17,9 @@ import torch
 from torch.optim import Optimizer
 
 
-class AttnEMA(Optimizer):
+class AttnRawV2(Optimizer):
     """
-    Cosine-attention over gradient window feeding into Adam-style EMA.
+    AttnRaw V2: cosine-attention over gradient window feeding into Adam-style EMA.
 
     Args:
         params:         model parameters
@@ -58,11 +58,10 @@ class AttnEMA(Optimizer):
         state["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
         state["grad_history"] = []
 
-    def _attend(self, g_flat: torch.Tensor, history: torch.Tensor) -> torch.Tensor:
+    def _compute_past_mix(self, g_flat: torch.Tensor, history: torch.Tensor) -> torch.Tensor:
         """Cosine-attention weighted sum over history (which includes g_flat)."""
-        # history: (K, d) — rows are past gradients, history[0] = g_t
+        # history: (K, d) — rows are gradients, history[0] = g_t
         norms = history.norm(dim=1).clamp(min=1e-8)
-        # Use g_flat (= history[0]) as the query
         query_norm = g_flat.norm().clamp(min=1e-8)
         scores = history @ g_flat / (norms * query_norm)
         alpha = torch.softmax(scores, dim=0)
@@ -103,7 +102,7 @@ class AttnEMA(Optimizer):
 
                 # Attention over full window (including g_t)
                 history = torch.stack(state["grad_history"], dim=0)
-                m_tilde_flat = self._attend(g_flat, history)
+                m_tilde_flat = self._compute_past_mix(g_flat, history)
                 m_tilde = m_tilde_flat.reshape_as(p)
 
                 # EMA first moment on m_tilde
@@ -126,6 +125,5 @@ class AttnEMA(Optimizer):
                     v_hat.sqrt().add_(eps),
                     value=-lr,
                 )
-
 
         return loss

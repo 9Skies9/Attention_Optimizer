@@ -55,7 +55,7 @@ RUNS = {
         },
     },
     "ATTNRAW-V2-8": {
-        "optimizer": "attnema",
+        "optimizer": "attnraw_v2",
         "lr": 3e-4,
         "weight_decay": 0.0,
         "attnema_config": {
