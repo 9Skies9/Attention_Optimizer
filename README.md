@@ -20,7 +20,7 @@ $$m_t = \beta_1 \ m_{t-1} + (1 - \beta_1) \, g_t$$
 
 AttnOpt replaces that fixed decay with a learned, selective attention for each layer $\ell$ over a sliding window of the last $L$ gradients:
 
-$$m_t^{(\ell)} = \beta^{(\ell)}\, g_t^{(\ell)} + \left(1-\beta^{(\ell)}\right)\sum_{i=1}^{L-1}\alpha_i^{(\ell)} g_{t-i}^{(\ell)}$$
+$$m_t^{(\ell)} = \beta^{(\ell)} g_t^{(\ell)} + \left(1-\beta^{(\ell)}\right)\sum_{i=1}^{L-1}\alpha_i^{(\ell)} g_{t-i}^{(\ell)}$$
 $$\alpha^{(\ell)}=\text{softmax}\!\left(\left[s_1^{(\ell)},s_2^{(\ell)},\dots,s_{L-1}^{(\ell)}\right]\right)$$
 $$s_i^{(\ell)}=\frac{q_t^{(\ell)}{k_{t-i}^{(\ell)}}^\top}{\sqrt{d_\ell}}, \qquad i\in\{1,\dots,L-1\}$$
 $$q_t^{(\ell)} = g_t^{(\ell)} W_Q^{(\ell)}, \qquad k_{t-i}^{(\ell)} = g_{t-i}^{(\ell)} W_K^{(\ell)}, \qquad i \in \{1,\dots,L-1\}$$
