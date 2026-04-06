@@ -109,12 +109,14 @@ class ExperimentQueue:
         )
 
 
-def run_training(run_id: str, gpu_id: int) -> bool:
+def run_training(run_id: str, gpu_id: int, extra_args: list[str]) -> bool:
     """Launch training for a single run."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
     cmd = ["python", "train.py", "--run_id", run_id]
+    if extra_args:
+        cmd.extend(extra_args)
     print(f"[GPU {gpu_id}] Starting: {run_id}")
     print(f"[GPU {gpu_id}] Command: {' '.join(cmd)}")
 
@@ -137,6 +139,10 @@ def main():
     parser.add_argument(
         "--max-retries", type=int, default=2, help="Max retries per run"
     )
+    parser.add_argument("--max_steps", type=str, default=None)
+    parser.add_argument("--max_tokens", type=str, default=None)
+    parser.add_argument("--checkpoint_every", type=str, default=None)
+    parser.add_argument("--resume_from", type=str, default=None)
     args = parser.parse_args()
 
     queue = ExperimentQueue(args.state_file)
@@ -146,6 +152,16 @@ def main():
 
     runs_completed = 0
     runs_failed = 0
+
+    extra_args = []
+    if args.max_steps:
+        extra_args.extend(["--max_steps", args.max_steps])
+    if args.max_tokens:
+        extra_args.extend(["--max_tokens", args.max_tokens])
+    if args.checkpoint_every:
+        extra_args.extend(["--checkpoint_every", args.checkpoint_every])
+    if args.resume_from:
+        extra_args.extend(["--resume_from", args.resume_from])
 
     while True:
         run_id = queue.get_next_run(args.gpu)
@@ -171,7 +187,7 @@ def main():
             if retry > 0:
                 print(f"[GPU {args.gpu}] Retry {retry}/{args.max_retries} for {run_id}")
 
-            if run_training(run_id, args.gpu):
+            if run_training(run_id, args.gpu, extra_args):
                 queue.mark_completed(run_id, success=True)
                 runs_completed += 1
                 print(f"[GPU {args.gpu}] SUCCESS: {run_id}")

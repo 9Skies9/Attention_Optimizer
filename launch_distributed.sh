@@ -4,7 +4,12 @@
 
 set -e
 
-GPUS=${1:-4}
+GPUS=4
+EXTRA_ARGS=("$@")
+if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+    GPUS="$1"
+    EXTRA_ARGS=("${@:2}")
+fi
 STATE_FILE="./experiment_state.json"
 
 # Remove old state file if exists (fresh start)
@@ -15,7 +20,7 @@ echo "State file: $STATE_FILE"
 
 for gpu in $(seq 0 $((GPUS-1))); do
     echo "Starting GPU $gpu..."
-    CUDA_VISIBLE_DEVICES=$gpu python run_distributed.py --gpu $gpu --state-file $STATE_FILE &
+    CUDA_VISIBLE_DEVICES=$gpu python run_distributed.py --gpu $gpu --state-file $STATE_FILE "${EXTRA_ARGS[@]}" &
 done
 
 echo ""

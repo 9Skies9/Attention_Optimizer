@@ -63,6 +63,20 @@ class CombinedOptimizer:
         for opt in self.optimizers:
             opt.step()
 
+    def state_dict(self):
+        return {
+            "optimizers": [opt.state_dict() for opt in self.optimizers],
+        }
+
+    def load_state_dict(self, state_dict):
+        opt_states = state_dict.get("optimizers", [])
+        if len(opt_states) != len(self.optimizers):
+            raise ValueError(
+                "Optimizer count mismatch when loading CombinedOptimizer state."
+            )
+        for opt, opt_state in zip(self.optimizers, opt_states):
+            opt.load_state_dict(opt_state)
+
 
 # ------------------------------------------------------------------ #
 # Utilities                                                           #
@@ -76,6 +90,23 @@ def cosine_schedule(step, warmup_steps, max_steps, max_lr, min_lr):
         return min_lr
     progress = (step - warmup_steps) / (max_steps - warmup_steps)
     return min_lr + 0.5 * (max_lr - min_lr) * (1.0 + math.cos(math.pi * progress))
+
+
+def _parse_count(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError:
+        return int(float(raw))
+
+
+def _tokens_per_step(tcfg):
+    return tcfg["micro_batch_size"] * tcfg["seq_len"] * tcfg["grad_accum_steps"]
+
+
+def _atomic_torch_save(payload, path: str):
+    tmp_path = f"{path}.tmp"
+    torch.save(payload, tmp_path)
+    os.replace(tmp_path, path)
 
 
 def build_model(run_cfg, model_config_override=None):
@@ -565,11 +596,50 @@ def build_optimizer(model, run_cfg):
 # ------------------------------------------------------------------ #
 
 
-def train(run_id: str):
+def train(
+    run_id: str,
+    max_steps_override: int | None = None,
+    max_tokens: int | None = None,
+    checkpoint_every: int | None = None,
+    resume_from: str | None = None,
+):
     run_cfg = RUNS[run_id]
-    tcfg = TRAIN_CONFIG
+    tcfg = dict(TRAIN_CONFIG)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     os.environ.setdefault("FINEWEB_MAX_SHARDS", "10")
+
+    env_max_steps = os.environ.get("MAX_STEPS")
+    env_max_tokens = os.environ.get("MAX_TOKENS")
+    env_checkpoint_every = os.environ.get("CHECKPOINT_EVERY")
+    env_resume_from = os.environ.get("RESUME_FROM")
+
+    if max_steps_override is None and env_max_steps:
+        max_steps_override = _parse_count(env_max_steps)
+    if max_tokens is None and env_max_tokens:
+        max_tokens = _parse_count(env_max_tokens)
+    if checkpoint_every is None and env_checkpoint_every:
+        checkpoint_every = _parse_count(env_checkpoint_every)
+    if resume_from is None and env_resume_from:
+        resume_from = env_resume_from
+
+    if max_steps_override is not None and max_tokens is not None:
+        raise ValueError("Use only one of max_steps or max_tokens.")
+
+    tokens_per_step = _tokens_per_step(tcfg)
+    max_steps = tcfg["max_steps"]
+    if max_tokens is not None:
+        max_steps = math.ceil(max_tokens / tokens_per_step)
+    elif max_steps_override is not None:
+        max_steps = max_steps_override
+
+    if max_steps <= 0:
+        raise ValueError("max_steps must be positive.")
+
+    tcfg["max_steps"] = max_steps
+    if checkpoint_every is None:
+        checkpoint_every = 500
+    if checkpoint_every < 0:
+        raise ValueError("checkpoint_every must be >= 0.")
 
     seed = tcfg["seed"]
     random.seed(seed)
@@ -584,7 +654,10 @@ def train(run_id: str):
     model = build_model(run_cfg)
     model = model.to(device)
     model = torch.compile(model)
-    print(f"[{run_id}] params: {model.get_num_params() / 1e6:.1f}M")
+    raw_model = getattr(model, "_orig_mod", model)
+    print(f"[{run_id}] params: {raw_model.get_num_params() / 1e6:.1f}M")
+    target_tokens = max_steps * tokens_per_step
+    print(f"[{run_id}] steps: {max_steps} (~{target_tokens:,} tokens)")
 
     # ---- Optimizer ----
     optimizer = build_optimizer(model, run_cfg)
@@ -598,15 +671,44 @@ def train(run_id: str):
     )
     data_iter = iter(loader)
 
-    # ---- Logging setup ----
+    # ---- Logging + Checkpoint setup ----
     log_dir = os.path.join(os.environ.get("LOG_DIR", "logs"), run_id)
     ckpt_dir = os.path.join(os.environ.get("CKPT_DIR", "checkpoints"), run_id)
     os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "metrics.jsonl")
-    log_file = open(log_path, "w")
+    ckpt_latest_path = os.path.join(ckpt_dir, "ckpt_latest.pt")
+    ckpt_final_path = os.path.join(ckpt_dir, "ckpt_final.pt")
+
+    def save_checkpoint(step, path):
+        payload = {
+            "model_state": raw_model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "run_cfg": run_cfg,
+            "train_config": tcfg,
+            "step": step,
+        }
+        _atomic_torch_save(payload, path)
+
+    if resume_from == "latest":
+        resume_from = ckpt_latest_path
+    if resume_from:
+        if not os.path.isfile(resume_from):
+            raise FileNotFoundError(f"Checkpoint not found: {resume_from}")
+        checkpoint = torch.load(resume_from, map_location=device)
+        raw_model.load_state_dict(checkpoint["model_state"])
+        opt_state = checkpoint.get("optimizer_state")
+        if opt_state is not None:
+            optimizer.load_state_dict(opt_state)
+        start_step = int(checkpoint.get("step", 0))
+        print(f"[{run_id}] Resumed from {resume_from} at step {start_step}")
+    else:
+        start_step = 0
+
+    log_mode = "a" if resume_from else "w"
+    log_file = open(log_path, log_mode)
 
     # ---- Training ----
-    max_steps = tcfg["max_steps"]
     warmup_steps = tcfg["warmup_steps"]
     grad_accum = tcfg["grad_accum_steps"]
     max_lr = run_cfg["lr"]
@@ -615,10 +717,10 @@ def train(run_id: str):
     log_interval = tcfg["log_interval"]
 
     model.train()
-    step = 0
+    step = start_step
     t0 = time.time()
 
-    pbar = tqdm(total=max_steps, desc=run_id, unit="step")
+    pbar = tqdm(total=max_steps, desc=run_id, unit="step", initial=step)
     while step < max_steps:
         # ---- LR schedule ----
         lr = cosine_schedule(step, warmup_steps, max_steps, max_lr, min_lr)
@@ -698,19 +800,15 @@ def train(run_id: str):
             t0 = time.time()
 
         step += 1
+        if checkpoint_every and step % checkpoint_every == 0:
+            save_checkpoint(step, ckpt_latest_path)
 
     pbar.close()
 
     # ---- Save checkpoint ----
-    os.makedirs(ckpt_dir, exist_ok=True)
-    ckpt_path = os.path.join(ckpt_dir, "ckpt_final.pt")
-    # Unwrap torch.compile wrapper so state_dict keys don't have "_orig_mod." prefix
-    raw_model = getattr(model, "_orig_mod", model)
-    torch.save(
-        {"model_state": raw_model.state_dict(), "run_cfg": run_cfg, "step": step},
-        ckpt_path,
-    )
-    print(f"[{run_id}] Saved checkpoint -> {ckpt_path}")
+    save_checkpoint(step, ckpt_latest_path)
+    save_checkpoint(step, ckpt_final_path)
+    print(f"[{run_id}] Saved checkpoint -> {ckpt_final_path}")
 
     log_file.close()
 
@@ -724,6 +822,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id", type=str, required=True, help="Run ID from configs/runs.py"
     )
+    parser.add_argument("--max_steps", type=str, default=None)
+    parser.add_argument("--max_tokens", type=str, default=None)
+    parser.add_argument("--checkpoint_every", type=str, default=None)
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Path to checkpoint, or 'latest' for checkpoints/<run_id>/ckpt_latest.pt",
+    )
     args = parser.parse_args()
 
     if args.run_id not in RUNS:
@@ -731,4 +838,15 @@ if __name__ == "__main__":
             f"Unknown run_id '{args.run_id}'. Available: {list(RUNS.keys())}"
         )
 
-    train(args.run_id)
+    max_steps = _parse_count(args.max_steps) if args.max_steps else None
+    max_tokens = _parse_count(args.max_tokens) if args.max_tokens else None
+    checkpoint_every = (
+        _parse_count(args.checkpoint_every) if args.checkpoint_every else None
+    )
+    train(
+        args.run_id,
+        max_steps_override=max_steps,
+        max_tokens=max_tokens,
+        checkpoint_every=checkpoint_every,
+        resume_from=args.resume_from,
+    )
