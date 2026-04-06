@@ -1,115 +1,170 @@
 # configs/runs.py
-# Optimizer-only experiment matrix for the first AttnOpt study.
+# Experiment matrix following research.md style:
+# - nanoGPT 44M
+# - Sweep over history length L ∈ {4, 8, 16}
+# - Sweep over temperature τ ∈ {0.5, 1.0, 2.0} for attention-based methods
+# - AttnRaw-v1/v2/v3, AttnPrec-v1/v2/v3 with L×τ sweep
+# - SimpleAvg-v1/v2/v3 with only L sweep (no temperature)
+# - SGD and AdamW baselines
 
-RUNS = {
-    "BASE-SGD": {
-        "optimizer": "sgd",
-        "lr": 1e-2,
-    },
-    "BASE-ADAM": {
-        "optimizer": "adam",
-        "lr": 3e-4,
-    },
-    "BASE-MUON": {
-        "optimizer": "muon",
-        "lr": 3e-4,
-    },
-    "AVG-8": {
-        "optimizer": "avg",
-        "lr": 3e-4,
-        "weight_decay": 0.0,
-        "avg_config": {
-            "context_length": 8,
-            "mix_beta": 0.9,
-            "raw_second_moment": False,
-        },
-    },
-    "AVG-8R": {
-        "optimizer": "avg",
-        "lr": 3e-4,
-        "weight_decay": 0.0,
-        "avg_config": {
-            "context_length": 8,
-            "mix_beta": 0.9,
-            "raw_second_moment": True,
-        },
-    },
-    "ATTNRAW-8": {
-        "optimizer": "attnraw",
+import itertools
+
+HISTORY_LENGTHS = [4, 8, 16]
+TEMPERATURES = [0.5, 1.0, 2.0]
+
+RUNS = {}
+
+# --- Baselines ---
+RUNS["SGD"] = {
+    "optimizer": "sgd",
+    "lr": 1e-2,
+}
+
+RUNS["ADAMW"] = {
+    "optimizer": "adamw",
+    "lr": 3e-4,
+    "weight_decay": 0.1,
+}
+
+# --- AttnRaw-v1: keep both m_{t-1} and v_{t-1} ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTNRAW-V1-L{L}-T{tau}"
+    RUNS[key] = {
+        "optimizer": "attnraw_v1",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attnraw_config": {
-            "context_length": 8,
+        "attn_config": {
+            "context_length": L,
             "mix_beta": 0.9,
-            "raw_second_moment": False,
+            "temperature": tau,
         },
-    },
-    "ATTNRAW-8R": {
-        "optimizer": "attnraw",
-        "lr": 3e-4,
-        "weight_decay": 0.0,
-        "attnraw_config": {
-            "context_length": 8,
-            "mix_beta": 0.9,
-            "raw_second_moment": True,
-        },
-    },
-    "ATTNRAW-V2-8": {
+    }
+
+# --- AttnRaw-v2: remove m_{t-1}, keep v_{t-1} ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTNRAW-V2-L{L}-T{tau}"
+    RUNS[key] = {
         "optimizer": "attnraw_v2",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attnema_config": {
-            "context_length": 8,
+        "attn_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
+            "temperature": tau,
         },
-    },
-    "ATTNRAW-V3-8": {
+    }
+
+# --- AttnRaw-v3: remove both m_{t-1} and v_{t-1} ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTNRAW-V3-L{L}-T{tau}"
+    RUNS[key] = {
         "optimizer": "attnraw_v3",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attnema_config": {
-            "context_length": 8,
+        "attn_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
+            "temperature": tau,
+        },
+    }
+
+# --- AttnPrec-v1: keep both m_{t-1} and v_{t-1} ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTPREC-V1-L{L}-T{tau}"
+    RUNS[key] = {
+        "optimizer": "attnprec_v1",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "attn_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
+            "temperature": tau,
+        },
+    }
+
+# --- AttnPrec-v2: remove m_{t-1}, keep v_{t-1} ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTPREC-V2-L{L}-T{tau}"
+    RUNS[key] = {
+        "optimizer": "attnprec_v2",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "attn_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
+            "temperature": tau,
+        },
+    }
+
+# --- AttnPrec-v3: remove both m_{t-1} and v_{t-1} ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTPREC-V3-L{L}-T{tau}"
+    RUNS[key] = {
+        "optimizer": "attnprec_v3",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "attn_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
+            "temperature": tau,
+        },
+    }
+
+# --- SimpleAvg-v1: keep both m_{t-1} and v_{t-1} ---
+for L in HISTORY_LENGTHS:
+    key = f"AVG-V1-L{L}"
+    RUNS[key] = {
+        "optimizer": "simpleavg_v1",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "avg_config": {
+            "context_length": L,
             "mix_beta": 0.9,
         },
-    },
-    "ATTNOPT-B-8": {
-        "optimizer": "attnopt_b",
+    }
+
+# --- SimpleAvg-v2: remove m_{t-1}, keep v_{t-1} ---
+for L in HISTORY_LENGTHS:
+    key = f"AVG-V2-L{L}"
+    RUNS[key] = {
+        "optimizer": "simpleavg_v2",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attnopt_config": {
-            "context_length": 8,
-            "d_attn": 64,
-            "lr_meta": 1e-4,
+        "avg_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
         },
-    },
-    "ATTNOPT-A-8": {
-        "optimizer": "attnopt_a",
+    }
+
+# --- SimpleAvg-v3: remove both m_{t-1} and v_{t-1} ---
+for L in HISTORY_LENGTHS:
+    key = f"AVG-V3-L{L}"
+    RUNS[key] = {
+        "optimizer": "simpleavg_v3",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attnopt_config": {
-            "context_length": 8,
-            "d_attn": 64,
-            "lr_meta": 1e-4,
-            "meta_every": 10,
+        "avg_config": {
+            "context_length": L,
+            "mix_beta": 0.9,
         },
-    },
-}
+    }
 
 TRAIN_CONFIG = {
-    "max_steps": 4_096,  # ~1.07B tokens at 262,144 tokens/step
-    "warmup_steps": 200,
+    "max_steps": 16_000,
+    "warmup_steps": 500,
     "min_lr_ratio": 0.1,
     "micro_batch_size": 16,
     "grad_accum_steps": 16,
     "seq_len": 1024,
     "grad_clip": 1.0,
-    "log_interval": 10,
+    "log_interval": 100,
     "seed": 42,
 }
 
 MODEL_CONFIG = {
-    "n_layer": 12,
-    "n_head": 12,
-    "n_embd": 768,
+    "n_layer": 6,
+    "n_head": 8,
+    "n_embd": 512,
     "vocab_size": 50304,
     "block_size": 1024,
 }

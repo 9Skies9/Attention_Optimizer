@@ -6,6 +6,7 @@
 import json
 import os
 import time
+from typing import Optional
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -63,11 +64,13 @@ def _list_shard_files(cache_dir: str, metadata=None):
             for idx in range(shard_count)
         ]
 
-    return sorted([
-        os.path.join(cache_dir, f)
-        for f in os.listdir(cache_dir)
-        if f.endswith(".bin")
-    ])
+    return sorted(
+        [
+            os.path.join(cache_dir, f)
+            for f in os.listdir(cache_dir)
+            if f.endswith(".bin")
+        ]
+    )
 
 
 def tokenize_and_cache(cache_dir: str = DATA_CACHE_DIR, max_shards=None):
@@ -138,7 +141,9 @@ def ensure_tokenized_cache(
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             if time.time() >= deadline:
-                raise TimeoutError(f"Timed out waiting for FineWeb cache lock: {lock_path}")
+                raise TimeoutError(
+                    f"Timed out waiting for FineWeb cache lock: {lock_path}"
+                )
             print("Waiting for FineWeb cache to finish building...")
             time.sleep(LOCK_POLL_SECONDS)
             continue
@@ -159,7 +164,9 @@ class FineWebDataset(Dataset):
         self.seq_len = seq_len
         metadata = _load_ready_metadata(cache_dir)
         shard_files = _list_shard_files(cache_dir, metadata=metadata)
-        assert shard_files, f"No .bin shards found in {cache_dir}. Run tokenize_and_cache() first."
+        assert shard_files, (
+            f"No .bin shards found in {cache_dir}. Run tokenize_and_cache() first."
+        )
 
         # Load all shards into a single array
         arrays = [np.fromfile(f, dtype=np.uint16) for f in shard_files]
@@ -174,7 +181,7 @@ class FineWebDataset(Dataset):
 
     def __getitem__(self, idx):
         start = idx * self.seq_len
-        chunk = self.data[start: start + self.seq_len + 1].astype(np.int64)
+        chunk = self.data[start : start + self.seq_len + 1].astype(np.int64)
         x = torch.from_numpy(chunk[:-1])
         y = torch.from_numpy(chunk[1:])
         return x, y
@@ -183,7 +190,7 @@ class FineWebDataset(Dataset):
 def get_dataloader(
     seq_len: int = 1024,
     micro_batch_size: int = 16,
-    cache_dir: str = None,
+    cache_dir: Optional[str] = None,
     num_workers: int = 4,
     shuffle: bool = True,
     seed: int = 42,
@@ -205,4 +212,30 @@ def get_dataloader(
         pin_memory=True,
         generator=generator,
         drop_last=True,
+    )
+
+
+def download_data(cache_dir: str = DATA_CACHE_DIR, max_shards=None):
+    if max_shards is None:
+        max_shards = _parse_env_max_shards()
+    metadata = ensure_tokenized_cache(cache_dir=cache_dir, max_shards=max_shards)
+    if metadata is None:
+        raise RuntimeError("FineWeb cache metadata missing after download.")
+    return metadata
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Download and cache FineWeb shards.")
+    parser.add_argument("--cache-dir", default=DATA_CACHE_DIR)
+    parser.add_argument("--max-shards", type=int, default=None)
+    args = parser.parse_args()
+
+    metadata = download_data(cache_dir=args.cache_dir, max_shards=args.max_shards)
+    if metadata is None:
+        raise SystemExit("FineWeb cache metadata missing after download.")
+    print(
+        "FineWeb cache ready: "
+        f"{metadata['shard_count']} shards, {metadata['token_count']:,} tokens"
     )

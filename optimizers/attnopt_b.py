@@ -2,16 +2,16 @@
 # AttnOptB: Learned W_Q/W_K with next-gradient prediction training signal.
 #
 # W_Q and W_K are per-tensor learned projections. After each step, the
-# optimizer observes g_{t+1} and trains W_Q/W_K to make m_tilde align
-# with it via cosine similarity loss (self-supervised, no val split).
+# optimizer observes g_{t+1} and trains W_Q/W_K so that the previous step's
+# m_tilde aligns with the newly observed gradient.
 #
 # Architecture:
-#   p_ell = numel(param) // 8          compression dim per tensor
-#   q_t   = g_flat @ W_Q              (d_attn,)
-#   k_i   = g_{t-i}_flat @ W_K        (d_attn,)
+#   q_t   = g_t @ W_Q                     (d_attn,)
+#   k_i   = g_{t-i} @ W_K                (d_attn,)
 #   s_i   = dot(q_t, k_i) / sqrt(d_attn)
 #   alpha = softmax(s)
-#   m_tilde = alpha @ history          (d_param,)
+#   m_past = alpha @ history
+#   m_tilde = (1 - mix_beta) * g_t + mix_beta * m_past
 #
 # Meta-update (next-gradient prediction):
 #   loss_phi = 1 - cos(m_tilde_prev, g_t)
@@ -47,6 +47,7 @@ class AttnOptB(Optimizer):
         weight_decay=0.0,
         context_length=8,
         d_attn=64,
+        mix_beta=0.9,
     ):
         defaults = dict(
             lr=lr,
@@ -56,13 +57,13 @@ class AttnOptB(Optimizer):
             weight_decay=weight_decay,
             context_length=context_length,
             d_attn=d_attn,
+            mix_beta=mix_beta,
         )
         super().__init__(params, defaults)
 
     def _init_param_state(self, p: torch.Tensor, d_attn: int):
         state = self.state[p]
         d = p.numel()
-        p_dim = max(1, d // 8)
 
         state["step"] = 0
         state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
@@ -71,17 +72,17 @@ class AttnOptB(Optimizer):
 
         # Learned projections — requires_grad so meta-loss can flow back
         state["W_Q"] = torch.nn.init.orthogonal_(
-            torch.empty(d, p_dim, dtype=torch.float32, device=p.device)
+            torch.empty(d, d_attn, dtype=torch.float32, device=p.device)
         ).requires_grad_(True)
         state["W_K"] = torch.nn.init.orthogonal_(
-            torch.empty(d, p_dim, dtype=torch.float32, device=p.device)
+            torch.empty(d, d_attn, dtype=torch.float32, device=p.device)
         ).requires_grad_(True)
 
         # Adam states for W_Q/W_K meta-optimizer
-        state["wq_exp_avg"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
-        state["wq_exp_avg_sq"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
-        state["wk_exp_avg"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
-        state["wk_exp_avg_sq"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
+        state["wq_exp_avg"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
+        state["wq_exp_avg_sq"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
+        state["wk_exp_avg"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
+        state["wk_exp_avg_sq"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
 
         # Previous step's m_tilde (for next-gradient prediction)
         state["m_tilde_prev"] = None
@@ -94,13 +95,12 @@ class AttnOptB(Optimizer):
         W_K: torch.Tensor,
         d_attn: int,
     ) -> torch.Tensor:
-        """Single-head attention: project g and history, compute scores, return mix."""
-        q = g_flat @ W_Q                        # (p_dim,) → (d_attn,) via W_Q: (d, p_dim) — wait, shape is (d, p_dim)
-        # g_flat: (d,), W_Q: (d, p_dim) → q: (p_dim,)  which IS d_attn
-        ks = history @ W_K                      # (K, d) @ (d, p_dim) → (K, p_dim)
-        scores = ks @ q / math.sqrt(d_attn)     # (K,)
-        alpha = torch.softmax(scores, dim=0)    # (K,)
-        return alpha @ history                  # (d,)
+        """Project current and past gradients into d_attn, then retrieve past values."""
+        q = g_flat @ W_Q
+        ks = history @ W_K
+        scores = ks @ q / math.sqrt(d_attn)
+        alpha = torch.softmax(scores, dim=0)
+        return alpha @ history
 
     def _adam_update(self, param, grad, exp_avg, exp_avg_sq, t, lr_meta, beta1=0.9, beta2=0.999, eps=1e-8):
         """In-place Adam update for a meta-parameter."""
@@ -125,6 +125,7 @@ class AttnOptB(Optimizer):
             wd = group["weight_decay"]
             K = group["context_length"]
             d_attn = group["d_attn"]
+            mix_beta = group["mix_beta"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -168,17 +169,22 @@ class AttnOptB(Optimizer):
                         )
                         W_K.grad.zero_()
 
-                # ---- Compute m_tilde with grad tracking for next step ----
-                state["grad_history"] = (
-                    [g_flat.detach().clone()] + state["grad_history"]
-                )[:K]
-                history = torch.stack(state["grad_history"], dim=0)  # (K, d)
-
+                # ---- Compute m_tilde from past-only history for next step ----
+                history_list = state["grad_history"][:K]
                 with torch.enable_grad():
-                    m_tilde_flat = self._attend(g_flat, history, W_Q, W_K, d_attn)
+                    if history_list:
+                        history = torch.stack(history_list, dim=0)
+                        m_past = self._attend(g_flat, history, W_Q, W_K, d_attn)
+                        m_tilde_flat = (1.0 - mix_beta) * g_flat + mix_beta * m_past
+                    else:
+                        m_tilde_flat = g_flat
                     state["m_tilde_prev"] = m_tilde_flat  # keep graph for next step
 
                 m_tilde = m_tilde_flat.detach().reshape_as(p)
+
+                state["grad_history"] = (
+                    [g_flat.detach().clone()] + state["grad_history"]
+                )[:K]
 
                 # ---- Adam-style update on model params ----
                 m = state["exp_avg"]

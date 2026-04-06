@@ -28,11 +28,11 @@ class Muon(Optimizer):
     """
     Muon optimizer.
     - Matrix params (ndim >= 2): Nesterov momentum + Newton-Schulz orthogonalization.
-    - All other params (embeddings, norms): AdamW.
+    - All other params (embeddings, norms): Adam.
     """
 
     def __init__(self, params, lr=3e-4, momentum=0.95,
-                 adam_lr=3e-4, adam_betas=(0.9, 0.95), adam_eps=1e-8,
+                 adam_lr=3e-4, adam_betas=(0.9, 0.999), adam_eps=1e-8,
                  weight_decay=0.0, ns_steps=5):
         defaults = dict(
             lr=lr, momentum=momentum,
@@ -65,7 +65,7 @@ class Muon(Optimizer):
                 state = self.state[p]
 
                 # Route embedding-like matrices (vocab_size >> n_embd, ratio ≥ 32)
-                # through AdamW instead of Newton-Schulz to avoid ~8x scale amplification.
+                # through Adam instead of Newton-Schulz to avoid ~8x scale amplification.
                 _is_muon_param = (
                     p.ndim >= 2
                     and max(p.shape) / min(p.shape) < 32
@@ -96,7 +96,7 @@ class Muon(Optimizer):
                     p.add_(g_orth, alpha=-lr)
 
                 else:
-                    # --- AdamW update for non-matrix params and embedding matrices ---
+                    # --- Adam update for non-matrix params and embedding matrices ---
                     if len(state) == 0:
                         state["step"] = 0
                         state["exp_avg"] = torch.zeros_like(p)

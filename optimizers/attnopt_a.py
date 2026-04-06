@@ -1,5 +1,5 @@
 #
-# AttnOptA: Learned W_Q/W_K with differentiable step + val split.
+# AttnOptA: Learned W_Q/W_K with differentiable step + held-out batch.
 #
 # W_Q/W_K are trained by: take a virtual differentiable step on the train
 # batch using the current attention-weighted m_tilde, then measure val loss
@@ -7,17 +7,15 @@
 # gradients on W_Q/W_K.
 #
 # The optimizer exposes two methods:
-#   .step(closure)       — normal model update (no_grad)
-#   .meta_step(model, val_x, val_y, lr)  — updates W_Q/W_K via val loss
+#   .step(closure)                 — normal model update (no_grad)
+#   .meta_step(model, val_x, val_y) — updates W_Q/W_K via val loss
 #
-# train.py calls meta_step every N steps after accumulating gradients.
-#
-# Architecture: same as AttnOptB (per-tensor W_Q/W_K, p = numel//8, d_attn=64)
+# train.py calls meta_step every N steps after the normal parameter update.
 
 import math
 import torch
-import torch.nn.functional as F
 from torch.optim import Optimizer
+from torch.func import functional_call
 
 
 class AttnOptA(Optimizer):
@@ -46,6 +44,7 @@ class AttnOptA(Optimizer):
         weight_decay=0.0,
         context_length=8,
         d_attn=64,
+        mix_beta=0.9,
         meta_every=10,
     ):
         defaults = dict(
@@ -56,6 +55,7 @@ class AttnOptA(Optimizer):
             weight_decay=weight_decay,
             context_length=context_length,
             d_attn=d_attn,
+            mix_beta=mix_beta,
             meta_every=meta_every,
         )
         super().__init__(params, defaults)
@@ -63,7 +63,6 @@ class AttnOptA(Optimizer):
     def _init_param_state(self, p: torch.Tensor, d_attn: int):
         state = self.state[p]
         d = p.numel()
-        p_dim = max(1, d // 8)
 
         state["step"] = 0
         state["exp_avg"] = torch.zeros_like(p, dtype=torch.float32)
@@ -71,27 +70,29 @@ class AttnOptA(Optimizer):
         state["grad_history"] = []
 
         state["W_Q"] = torch.nn.init.orthogonal_(
-            torch.empty(d, p_dim, dtype=torch.float32, device=p.device)
+            torch.empty(d, d_attn, dtype=torch.float32, device=p.device)
         ).requires_grad_(True)
         state["W_K"] = torch.nn.init.orthogonal_(
-            torch.empty(d, p_dim, dtype=torch.float32, device=p.device)
+            torch.empty(d, d_attn, dtype=torch.float32, device=p.device)
         ).requires_grad_(True)
 
-        state["wq_exp_avg"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
-        state["wq_exp_avg_sq"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
-        state["wk_exp_avg"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
-        state["wk_exp_avg_sq"] = torch.zeros(d, p_dim, dtype=torch.float32, device=p.device)
+        state["wq_exp_avg"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
+        state["wq_exp_avg_sq"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
+        state["wk_exp_avg"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
+        state["wk_exp_avg_sq"] = torch.zeros(d, d_attn, dtype=torch.float32, device=p.device)
 
-        # Snapshot of last computed m_tilde and v_hat for virtual step
+        # Snapshots needed to rebuild the exact current step differentiably.
+        state["param_before"] = None
+        state["exp_avg_before"] = None
+        state["exp_avg_sq_before"] = None
         state["last_m_tilde"] = None
-        state["last_v_hat"] = None
 
     def _attend(self, g_flat, history, W_Q, W_K, d_attn):
-        q = g_flat @ W_Q                        # (p_dim,)
-        ks = history @ W_K                      # (K, p_dim)
-        scores = ks @ q / math.sqrt(d_attn)     # (K,)
+        q = g_flat @ W_Q
+        ks = history @ W_K
+        scores = ks @ q / math.sqrt(d_attn)
         alpha = torch.softmax(scores, dim=0)
-        return alpha @ history                  # (d,)
+        return alpha @ history
 
     def _adam_update(self, param, grad, exp_avg, exp_avg_sq, t, lr_meta, beta1=0.9, beta2=0.999, eps=1e-8):
         exp_avg.mul_(beta1).add_(grad, alpha=1.0 - beta1)
@@ -114,6 +115,7 @@ class AttnOptA(Optimizer):
             wd = group["weight_decay"]
             K = group["context_length"]
             d_attn = group["d_attn"]
+            mix_beta = group["mix_beta"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -132,19 +134,24 @@ class AttnOptA(Optimizer):
                 W_Q = state["W_Q"]
                 W_K = state["W_K"]
 
-                state["grad_history"] = (
-                    [g_flat.detach().clone()] + state["grad_history"]
-                )[:K]
-                history = torch.stack(state["grad_history"], dim=0)
+                state["param_before"] = p.detach().clone()
+                state["exp_avg_before"] = state["exp_avg"].detach().clone()
+                state["exp_avg_sq_before"] = state["exp_avg_sq"].detach().clone()
 
-                # Compute m_tilde (detached for model update, but stored with
-                # grad for meta_step to use later)
+                history_list = state["grad_history"][:K]
+
+                # Compute m_tilde from past-only history. Keep the graph alive so
+                # meta_step can differentiate the virtual update w.r.t. W_Q/W_K.
                 with torch.enable_grad():
-                    m_tilde_flat = self._attend(g_flat, history, W_Q, W_K, d_attn)
+                    if history_list:
+                        history = torch.stack(history_list, dim=0)
+                        m_past = self._attend(g_flat, history, W_Q, W_K, d_attn)
+                        m_tilde_flat = (1.0 - mix_beta) * g_flat + mix_beta * m_past
+                    else:
+                        m_tilde_flat = g_flat
 
                 m_tilde = m_tilde_flat.detach().reshape_as(p)
 
-                # Store for virtual step in meta_step
                 m = state["exp_avg"]
                 m.mul_(beta1).add_(m_tilde, alpha=1.0 - beta1)
                 m_hat = m / (1.0 - beta1 ** t)
@@ -153,8 +160,7 @@ class AttnOptA(Optimizer):
                 v.mul_(beta2).addcmul_(m_tilde, m_tilde, value=1.0 - beta2)
                 v_hat = v / (1.0 - beta2 ** t)
 
-                state["last_m_tilde"] = m_tilde_flat          # has grad via W_Q/W_K
-                state["last_v_hat"] = v_hat.detach().clone()  # no grad needed
+                state["last_m_tilde"] = m_tilde_flat
 
                 if wd != 0.0:
                     p.mul_(1.0 - lr * wd)
@@ -165,86 +171,71 @@ class AttnOptA(Optimizer):
                     value=-lr,
                 )
 
+                state["grad_history"] = (
+                    [g_flat.detach().clone()] + state["grad_history"]
+                )[:K]
+
         return loss
 
     def meta_step(self, model, val_x, val_y):
         """
-        Update W_Q/W_K using val loss after a virtual differentiable step.
-
-        Virtual step: theta' = theta - lr * m_hat / (sqrt(v_hat) + eps)
-        where m_hat is derived from m_tilde which flows back to W_Q/W_K.
-
-        Call this after .step() every meta_every steps.
+        Update W_Q/W_K using val loss after a differentiable reconstruction of
+        the train-step update. This is the real bilevel path: val loss is
+        evaluated at theta' built from pre-step theta/state plus last_m_tilde.
         """
-        # Collect all params and build virtual theta'
-        # We re-derive m_hat from last_m_tilde (which has grad through W_Q/W_K)
+        name_to_param = dict(model.named_parameters())
+        param_to_name = {id(param): name for name, param in name_to_param.items()}
+        buffers = dict(model.named_buffers())
         virtual_params = {}
 
         for group in self.param_groups:
             lr = group["lr"]
             beta1, beta2 = group["betas"]
             eps = group["eps"]
+            wd = group["weight_decay"]
 
             for p in group["params"]:
                 state = self.state[p]
-                if len(state) == 0 or state["last_m_tilde"] is None:
+                if (
+                    len(state) == 0
+                    or state["last_m_tilde"] is None
+                    or state["param_before"] is None
+                ):
                     continue
 
                 t = state["step"]
-                m_tilde_flat = state["last_m_tilde"]    # has grad through W_Q/W_K
-                v_hat = state["last_v_hat"]
-
+                m_tilde_flat = state["last_m_tilde"]
                 m_tilde = m_tilde_flat.reshape_as(p)
 
-                # Recompute m_hat differentiably
-                # Use current exp_avg state — detach the EMA accumulation,
-                # only let gradient flow through the current m_tilde term
-                m_ema_prev = state["exp_avg"].detach().clone()
-                m_new = beta1 * m_ema_prev + (1.0 - beta1) * m_tilde
-                m_hat = m_new / (1.0 - beta1 ** t)
+                m_prev = state["exp_avg_before"]
+                v_prev = state["exp_avg_sq_before"]
+                p_before = state["param_before"]
 
-                # Virtual differentiable step (no in-place)
+                m_new = beta1 * m_prev + (1.0 - beta1) * m_tilde
+                m_hat = m_new / (1.0 - beta1 ** t)
+                v_new = beta2 * v_prev + (1.0 - beta2) * (m_tilde * m_tilde)
+                v_hat = v_new / (1.0 - beta2 ** t)
+
                 update = m_hat / (v_hat.sqrt().add(eps))
-                p_prime = p.detach() - lr * update.to(p.dtype)
-                virtual_params[p] = p_prime
+                if wd != 0.0:
+                    p_base = p_before * (1.0 - lr * wd)
+                else:
+                    p_base = p_before
+                p_prime = p_base - lr * update.to(p.dtype)
+
+                param_name = param_to_name.get(id(p))
+                if param_name is not None:
+                    virtual_params[param_name] = p_prime
 
         if not virtual_params:
             return
 
-        # Temporarily swap model params with virtual ones
-        original_data = {}
-        for p, p_prime in virtual_params.items():
-            original_data[p] = p.data
-            p.data = p_prime.data  # swap in virtual params
-
-        # Forward on val batch with virtual params
         with torch.enable_grad():
-            _, val_loss = model(val_x, val_y)
-
-        # Backward to get gradients on W_Q/W_K
-        # Need to manually associate the loss with virtual_params' graph
-        # Restore original params first so model is intact
-        for p, orig in original_data.items():
-            p.data = orig
-
-        # Collect all W_Q/W_K
-        meta_params = []
-        for group in self.param_groups:
-            for p in group["params"]:
-                state = self.state[p]
-                if len(state) == 0:
-                    continue
-                meta_params.extend([state["W_Q"], state["W_K"]])
-
-        # Recompute val loss through the virtual step properly
-        # (swap data again, run forward with autograd enabled)
-        for p, p_prime in virtual_params.items():
-            p.data = p_prime.data
-
-        val_loss.backward()
-
-        for p, orig in original_data.items():
-            p.data = orig
+            full_param_dict = {}
+            for name, param in name_to_param.items():
+                full_param_dict[name] = virtual_params.get(name, param)
+            _, val_loss = functional_call(model, (full_param_dict, buffers), (val_x, val_y))
+            val_loss.backward()
 
         # Update W_Q/W_K
         for group in self.param_groups:

@@ -26,11 +26,21 @@ from optimizers.attnraw_v2 import AttnRawV2
 from optimizers.attnraw_v3 import AttnRawV3
 from optimizers.attnopt_b import AttnOptB
 from optimizers.attnopt_a import AttnOptA
+from optimizers.attnraw_v1_new import AttnRawV1 as AttnRawV1New
+from optimizers.attnraw_v2_new import AttnRawV2 as AttnRawV2New
+from optimizers.attnraw_v3_new import AttnRawV3 as AttnRawV3New
+from optimizers.attnprec_v1 import AttnPrecV1
+from optimizers.attnprec_v2 import AttnPrecV2
+from optimizers.attnprec_v3 import AttnPrecV3
+from optimizers.simpleavg_v1 import SimpleAvgV1
+from optimizers.simpleavg_v2 import SimpleAvgV2
+from optimizers.simpleavg_v3 import SimpleAvgV3
 
 
 # ------------------------------------------------------------------ #
 # Combined optimizer wrapper                                          #
 # ------------------------------------------------------------------ #
+
 
 class CombinedOptimizer:
     """Wraps two optimizers so train.py can call .step() / .zero_grad() once."""
@@ -57,6 +67,7 @@ class CombinedOptimizer:
 # ------------------------------------------------------------------ #
 # Utilities                                                           #
 # ------------------------------------------------------------------ #
+
 
 def cosine_schedule(step, warmup_steps, max_steps, max_lr, min_lr):
     if step < warmup_steps:
@@ -86,6 +97,11 @@ def build_optimizer(model, run_cfg):
     elif opt_name == "adam":
         return torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
 
+    elif opt_name == "adamw":
+        return torch.optim.AdamW(
+            model.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd
+        )
+
     elif opt_name == "muon":
         embed_ids = {id(model.wte.weight)}
         embed_params, other_params = [], []
@@ -100,7 +116,11 @@ def build_optimizer(model, run_cfg):
                 other_params.append(p)
         muon_opt = Muon(other_params, lr=lr, weight_decay=wd)
         embed_opt = torch.optim.Adam(
-            embed_params, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd,
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
         )
         return CombinedOptimizer([muon_opt, embed_opt])
 
@@ -130,7 +150,11 @@ def build_optimizer(model, run_cfg):
             raw_second_moment=scfg.get("raw_second_moment", False),
         )
         embed_opt = torch.optim.Adam(
-            embed_params, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd,
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
         )
         return CombinedOptimizer([avg_opt, embed_opt])
 
@@ -161,7 +185,11 @@ def build_optimizer(model, run_cfg):
             raw_second_moment=acfg.get("raw_second_moment", False),
         )
         embed_opt = torch.optim.Adam(
-            embed_params, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd,
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
         )
         return CombinedOptimizer([attn_opt, embed_opt])
 
@@ -187,7 +215,11 @@ def build_optimizer(model, run_cfg):
             context_length=ecfg["context_length"],
         )
         embed_opt = torch.optim.Adam(
-            embed_params, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd,
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
         )
         return CombinedOptimizer([attnema_opt, embed_opt])
 
@@ -214,7 +246,11 @@ def build_optimizer(model, run_cfg):
             mix_beta=vcfg.get("mix_beta", 0.9),
         )
         embed_opt = torch.optim.Adam(
-            embed_params, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd,
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
         )
         return CombinedOptimizer([attnema_opt, embed_opt])
 
@@ -241,12 +277,284 @@ def build_optimizer(model, run_cfg):
             weight_decay=wd,
             context_length=acfg["context_length"],
             d_attn=acfg.get("d_attn", 64),
-            **( {"meta_every": acfg["meta_every"]} if opt_name == "attnopt_a" else {} ),
+            mix_beta=acfg.get("mix_beta", 0.9),
+            **({"meta_every": acfg["meta_every"]} if opt_name == "attnopt_a" else {}),
         )
         embed_opt = torch.optim.Adam(
-            embed_params, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=wd,
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
         )
         return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "attnraw_v1":
+        acfg = run_cfg["attn_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        attn_opt = AttnRawV1New(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            temperature=acfg.get("temperature", 1.0),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "attnraw_v2":
+        acfg = run_cfg["attn_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        attn_opt = AttnRawV2New(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            temperature=acfg.get("temperature", 1.0),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "attnraw_v3":
+        acfg = run_cfg["attn_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        attn_opt = AttnRawV3New(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            temperature=acfg.get("temperature", 1.0),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "attnprec_v1":
+        acfg = run_cfg["attn_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        attn_opt = AttnPrecV1(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            temperature=acfg.get("temperature", 1.0),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "attnprec_v2":
+        acfg = run_cfg["attn_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        attn_opt = AttnPrecV2(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            temperature=acfg.get("temperature", 1.0),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "attnprec_v3":
+        acfg = run_cfg["attn_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        attn_opt = AttnPrecV3(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+            temperature=acfg.get("temperature", 1.0),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([attn_opt, embed_opt])
+
+    elif opt_name == "simpleavg_v1":
+        acfg = run_cfg["avg_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        avg_opt = SimpleAvgV1(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([avg_opt, embed_opt])
+
+    elif opt_name == "simpleavg_v2":
+        acfg = run_cfg["avg_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        avg_opt = SimpleAvgV2(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([avg_opt, embed_opt])
+
+    elif opt_name == "simpleavg_v3":
+        acfg = run_cfg["avg_config"]
+        embed_ids = {id(model.wte.weight)}
+        embed_params, other_params = [], []
+        seen = set()
+        for name, p in model.named_parameters():
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
+            if id(p) in embed_ids:
+                embed_params.append(p)
+            else:
+                other_params.append(p)
+        avg_opt = SimpleAvgV3(
+            other_params,
+            lr=lr,
+            weight_decay=wd,
+            context_length=acfg["context_length"],
+            mix_beta=acfg.get("mix_beta", 0.9),
+        )
+        embed_opt = torch.optim.Adam(
+            embed_params,
+            lr=lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=wd,
+        )
+        return CombinedOptimizer([avg_opt, embed_opt])
 
     else:
         raise ValueError(f"Unknown optimizer: {opt_name}")
@@ -255,6 +563,7 @@ def build_optimizer(model, run_cfg):
 # ------------------------------------------------------------------ #
 # Main training loop                                                  #
 # ------------------------------------------------------------------ #
+
 
 def train(run_id: str):
     run_cfg = RUNS[run_id]
@@ -359,14 +668,19 @@ def train(run_id: str):
                     data_iter = iter(loader)
                     val_x, val_y = next(data_iter)
                 val_x, val_y = val_x.to(device), val_y.to(device)
-                attnopt_a_inner.meta_step(model, val_x, val_y)
+                raw_model = getattr(model, "_orig_mod", model)
+                attnopt_a_inner.meta_step(raw_model, val_x, val_y)
 
         # ---- Logging ----
         pbar.update(1)
         if step % log_interval == 0 and step > 0:
             dt = time.time() - t0
             tokens_per_sec = (
-                tcfg["micro_batch_size"] * tcfg["seq_len"] * grad_accum * log_interval / dt
+                tcfg["micro_batch_size"]
+                * tcfg["seq_len"]
+                * grad_accum
+                * log_interval
+                / dt
             )
             log = {
                 "step": step,
@@ -376,7 +690,11 @@ def train(run_id: str):
             }
             log_file.write(json.dumps(log) + "\n")
             log_file.flush()
-            pbar.set_postfix(loss=f"{accum_loss:.4f}", lr=f"{lr:.2e}", tok_s=f"{tokens_per_sec/1e3:.1f}k")
+            pbar.set_postfix(
+                loss=f"{accum_loss:.4f}",
+                lr=f"{lr:.2e}",
+                tok_s=f"{tokens_per_sec / 1e3:.1f}k",
+            )
             t0 = time.time()
 
         step += 1
@@ -403,10 +721,14 @@ def train(run_id: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run_id", type=str, required=True, help="Run ID from configs/runs.py")
+    parser.add_argument(
+        "--run_id", type=str, required=True, help="Run ID from configs/runs.py"
+    )
     args = parser.parse_args()
 
     if args.run_id not in RUNS:
-        raise ValueError(f"Unknown run_id '{args.run_id}'. Available: {list(RUNS.keys())}")
+        raise ValueError(
+            f"Unknown run_id '{args.run_id}'. Available: {list(RUNS.keys())}"
+        )
 
     train(args.run_id)

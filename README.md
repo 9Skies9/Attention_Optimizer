@@ -1,59 +1,96 @@
-## Motivation
+## AttnPrec: Metric-Aware Cosine Attention over Gradient History
 
-[Attention Residuals](https://arxiv.org/abs/2603.15031) showed that replacing fixed residual connections with attention-based ones can improve performance.
+### Motivation
 
-- <img src="assets/residuals.png" width="200"/>
+Modern large-scale model training is highly sensitive to the choice of optimizer. Adam/AdamW remain default choices because they provide good convergence with exponential moving averages (EMAs) of gradient moments. However, this compression can be an information bottleneck when gradient directions change non-stationarily.
 
-Andrej Karpathy's followed up with a [thought](https://x.com/karpathy/status/2033400893346107835) whether stochastic gradient descent could also use attention in it:
+This project explores whether optimization history can be mixed in a **content-dependent way** using attention, rather than through a fixed exponential decay.
 
-- <img src="assets/kaparthy.png" width="400"/>
+### Method
 
-That made me look at Adam’s first-moment EMA differently: it compresses gradient history into a single exponentially decayed running average, much like a hidden state bottleneck in early sequential models.
+We propose two attention-based optimizer families that operate independently per tensor/layer:
 
-So the question becomes: instead of forcing optimization history through one EMA, can an optimizer use attention to attend over recent gradients and decide what matters?
+**AttnRaw**: attention scores computed in raw gradient space
+**AttnPrec**: attention scores computed in preconditioned gradient space (using second-moment normalization)
 
-## AttnOpt: Tensorwise History Mixing
+For each family, we define three variants to test the role of retained optimizer state:
 
-Adam's update rule uses an EMA of gradients as its first moment:
+| Variant | Keeps m_{t-1}? | Keeps v_{t-1}? |
+|---------|-----------------|-----------------|
+| v1      | Yes             | Yes             |
+| v2      | No              | Yes             |
+| v3      | No              | No              |
 
-$$m_t = \beta_1 \ m_{t-1} + (1 - \beta_1) g_t$$
+We also include a **SimpleAvg** baseline that replaces attention with uniform averaging over the same history window.
 
-AttnOpt replaces that fixed decay with a learned, selective attention for each layer $\ell$ over a sliding window of the last $L$ gradients:
+### Experiment Design
 
-$$m_t^{(\ell)} = \beta^{(\ell)} g_t^{(\ell)} + \left(1-\beta^{(\ell)}\right)\sum_{i=1}^{L-1}\alpha_i^{(\ell)} g_{t-i}^{(\ell)}$$
-$$\alpha^{(\ell)}=\text{softmax}\!\left(\left[s_1^{(\ell)},s_2^{(\ell)},\dots,s_{L-1}^{(\ell)}\right]\right)$$
-$$s_i^{(\ell)}=\frac{q_t^{(\ell)}{k_{t-i}^{(\ell)}}^\top}{\sqrt{d_\ell}}, \qquad i\in\{1,\dots,L-1\}$$
-$$q_t^{(\ell)} = g_t^{(\ell)} W_Q^{(\ell)}, \qquad k_{t-i}^{(\ell)} = g_{t-i}^{(\ell)} W_K^{(\ell)}, \qquad i \in \{1,\dots,L-1\}$$
+Following the research.md specification:
 
-We will also have a no parameters baseline for testing raw attention scores from cosine similarity over raw gradient history:
+- **Model**: nanoGPT ~44M (~46M params: 6 layers, 8 heads, 512 dim)
+- **Training budget**: ~4.2B tokens per run (16,000 steps × 262,144 tokens/step)
+- **History length sweep**: L ∈ {4, 8, 16}
+- **Temperature sweep**: τ ∈ {0.5, 1.0, 2.0} (for attention-based methods)
 
-$$s_i^{(\ell)} = \cos\!\left(g_t^{(\ell)},g_{t-i}^{(\ell)}\right), \qquad i \in \{1,\dots,L-1\}$$
+### Optimizer Variants
 
-## Testing
+| Optimizer      | Similarity Metric     | State Retention | Formula Type                |
+|----------------|----------------------|-----------------|-----------------------------|
+| AdamW          | N/A                  | m + v           | Standard AdamW              |
+| SGD            | N/A                  | None            | Vanilla SGD                 |
+| AttnRaw-v1/v2/v3 | Cosine (raw)      | v1: m+v, v2: v, v3: none | Attention-weighted mixture |
+| AttnPrec-v1/v2/v3 | Cosine (preconditioned) | v1: m+v, v2: v, v3: none | Attention-weighted mixture |
+| SimpleAvg-v1/v2/v3 | Uniform average   | v1: m+v, v2: v, v3: none | Simple average mixture    |
 
+### Key Formulas
 
-The goal is to see whether AttnOpt can match or beat SGD, Adam, Muon, and a sliding-average history baseline on validation loss at a fixed token budget.
+**AttnPrec** uses preconditioned gradients for similarity:
+```
+g_t~ = g_t / (sqrt(v_{t-1}) + eps)
+g_{t-i}~ = g_{t-i} / (sqrt(v_{t-i}) + eps)
+s_i = cos(g_t~, g_{t-i}~)
+```
 
-Currently we will test on LLMs, if it seems promising we might test other fields as well.
+**Gradient mixture** (all variants):
+```
+g_bar = beta * g_t + (1 - beta) * sum_i(alpha_i * g_{t-i})
+```
 
-- Architecture:  Karpathy's nanoGPT architecture (with the improvements documented in [here](https://github.com/karpathy/nanochat/discussions/481))
-- Pre-training dataset: HuggingFace's [FineWeb](https://huggingface.co/datasets/HuggingFaceFW/fineweb) dataset
-- Training budget: ~`1.07B` tokens per run (`4,096` steps × `262,144` tokens/step).
-- All history-based runs look back `8` gradients.
+### Running Experiments
 
-| ID           | First moment (m̃)                 | Second moment (v tracks EMA of…) |
-| ------------ | --------------------------------- | -------------------------------- |
-| `BASE-SGD`   | —                                 | —                                |
-| `BASE-ADAM`  | g_t                               | g_t²                             |
-| `BASE-MUON`  | —                                 | —                                |
-| `AVG-8`      | 0.1·g_t + 0.9·mean(past 8)        | m̃²                              |
-| `AVG-8R`     | 0.1·g_t + 0.9·mean(past 8)        | g_t²                             |
-| `ATTNRAW-8`  | 0.1·g_t + 0.9·cosine-attn(past 8) | m̃²                              |
-| `ATTNRAW-8R` | 0.1·g_t + 0.9·cosine-attn(past 8) | g_t²                             |
-| `ATTNOPT-8`  | —                                 | —                                |
+**Single run:**
+```bash
+python train.py --run_id ATTNRAW-V1-L8-T1.0
+```
 
-## Results
+**Distributed across 4 GPUs (recommended):**
+```bash
+# Launch all 4 GPUs - they coordinate via shared state file
+./launch_distributed.sh
 
-Loss curves compared in `analysis/results.ipynb`.
+# Monitor progress
+cat experiment_state.json
 
-![Baseline loss curves](assets/baseline_loss.png)
+# Or watch live
+watch -n 5 'cat experiment_state.json'
+
+# Kill all
+pkill -f run_distributed.py
+```
+
+**How it works:** 4 processes share a JSON state file (`experiment_state.json`). When a GPU finishes a run, it atomically claims the next available run. This means GPUs stay balanced - if one is faster it just picks up more work.
+
+### Available Runs
+
+- **Baselines**: SGD, AdamW
+- **AttnRaw-v1/v2/v3**: 3 variants × 3 L values × 3 τ values = 27 runs
+- **AttnPrec-v1/v2/v3**: 3 variants × 3 L values × 3 τ values = 27 runs
+- **SimpleAvg-v1/v2/v3**: 3 variants × 3 L values = 9 runs
+
+**Total: 65 runs** at ~4.2B tokens each (~2-3 hours per run on A100)
+
+### Success Criteria
+
+- AttnPrec variants should outperform AttnRaw if metric-aware similarity helps retrieval
+- v2 or v3 should remain competitive with v1 if explicit history can replace Adam-style state
+- Improvements should not come with prohibitive compute/memory overhead
