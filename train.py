@@ -225,7 +225,7 @@ def build_optimizer(model, run_cfg):
         return CombinedOptimizer([attn_opt, embed_opt])
 
     elif opt_name == "attnraw_v2":
-        ecfg = run_cfg["attnema_config"]
+        ecfg = run_cfg["attn_config"]
 
         embed_ids = {id(model.wte.weight)}
         embed_params, other_params = [], []
@@ -255,7 +255,7 @@ def build_optimizer(model, run_cfg):
         return CombinedOptimizer([attnema_opt, embed_opt])
 
     elif opt_name == "attnraw_v3":
-        vcfg = run_cfg["attnema_config"]
+        vcfg = run_cfg["attn_config"]
 
         embed_ids = {id(model.wte.weight)}
         embed_params, other_params = [], []
