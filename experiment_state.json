@@ -11,16 +11,7 @@
     "ATTNRAW-V1-L8-T2.0": "success",
     "ATTNRAW-V1-L16-T0.5": "success",
     "ATTNRAW-V1-L16-T1.0": "success",
-    "ATTNRAW-V1-L16-T2.0": "success",
-    "ATTNRAW-V2-L4-T0.5": "success",
-    "ATTNRAW-V2-L4-T1.0": "success",
-    "ATTNRAW-V2-L4-T2.0": "success",
-    "ATTNRAW-V2-L8-T0.5": "success",
-    "ATTNRAW-V2-L8-T1.0": "success",
-    "ATTNRAW-V2-L8-T2.0": "success",
-    "ATTNRAW-V2-L16-T0.5": "success",
-    "ATTNRAW-V2-L16-T1.0": "success",
-    "ATTNRAW-V2-L16-T2.0": "success"
+    "ATTNRAW-V1-L16-T2.0": "success"
   },
   "in_progress": {},
   "failed": {}
