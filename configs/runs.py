@@ -87,7 +87,7 @@ for mix_beta in MIX_BETAS:
     }
 
 TRAIN_CONFIG = {
-    "max_steps": 16_000,
+    "max_tokens": 2_000_000_000,
     "warmup_steps": 500,
     "min_lr_ratio": 0.1,
     "micro_batch_size": 16,
