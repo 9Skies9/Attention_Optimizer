@@ -1,16 +1,22 @@
 #
-# SimpleAvg V2: Simple average over gradient history, no first-moment EMA.
+# SimpleAvg: True uniform average over gradient window.
 #
-# Uses simple averaging (not attention) to mix current gradient with history.
-# Only v_{t-1} is retained; m_{t-1} is replaced by the averaged mixture.
+# g_bar = mean([g_t, g_{t-1}, ..., g_{t-K}])
+# Second moment uses EMA for normalization.
+# No EMA on first moment — g_bar is used directly.
+#
 
 import torch
 from torch.optim import Optimizer
 
 
-class SimpleAvgV2(Optimizer):
+class SimpleAvg(Optimizer):
     """
-    SimpleAvg V2: simple averaging, no first-moment EMA.
+    True uniform average over gradient window (including current gradient).
+
+    g_bar = mean([g_t, g_{t-1}, ..., g_{t-K}])
+    v = EMA(g_bar^2)
+    p += -lr * g_bar / sqrt(v_hat)
 
     Args:
         params:         model parameters
@@ -18,8 +24,8 @@ class SimpleAvgV2(Optimizer):
         betas:          (beta2,) — EMA decay for second moment only
         eps:            numerical stability term
         weight_decay:   decoupled weight decay
-        context_length: number of past gradients to average over
-        mix_beta:       weight assigned to past gradient average
+        context_length: number of PAST gradients to store (K)
+                         Window includes g_t, total K+1 gradients
     """
 
     def __init__(
@@ -30,12 +36,9 @@ class SimpleAvgV2(Optimizer):
         eps=1e-8,
         weight_decay=0.0,
         context_length=8,
-        mix_beta=0.9,
     ):
         if context_length < 1:
             raise ValueError("context_length must be >= 1")
-        if not 0.0 < mix_beta <= 1.0:
-            raise ValueError("mix_beta must be in (0, 1]")
 
         defaults = dict(
             lr=lr,
@@ -43,7 +46,6 @@ class SimpleAvgV2(Optimizer):
             eps=eps,
             weight_decay=weight_decay,
             context_length=context_length,
-            mix_beta=mix_beta,
         )
         super().__init__(params, defaults)
 
@@ -66,7 +68,6 @@ class SimpleAvgV2(Optimizer):
             eps = group["eps"]
             wd = group["weight_decay"]
             K = group["context_length"]
-            mix_beta = group["mix_beta"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -83,15 +84,10 @@ class SimpleAvgV2(Optimizer):
                 t = state["step"]
 
                 past = state["grad_history"][:K]
-                if past:
-                    history = torch.stack(past, dim=0)
-                    m_past = history.mean(dim=0)
-                    g_bar_flat = mix_beta * g_flat + (1.0 - mix_beta) * m_past
-                else:
-                    g_bar_flat = g_flat
+                all_grads = [g_flat] + past
+                g_bar_flat = torch.stack(all_grads, dim=0).mean(dim=0)
 
                 g_bar = g_bar_flat.reshape_as(p)
-                m_t = g_bar
 
                 v = state["exp_avg_sq"]
                 v.mul_(beta2).addcmul_(g_bar, g_bar, value=1.0 - beta2)
@@ -105,7 +101,7 @@ class SimpleAvgV2(Optimizer):
                     p.mul_(1.0 - lr * wd)
 
                 p.addcdiv_(
-                    m_t.to(p.dtype),
+                    g_bar.to(p.dtype),
                     v_hat.sqrt().add_(eps),
                     value=-lr,
                 )

@@ -1,11 +1,9 @@
 # configs/runs.py
-# Experiment matrix following research.md style:
-# - nanoGPT 44M
-# - Sweep over history length L ∈ {4, 8, 16}
-# - Sweep over temperature τ ∈ {0.5, 1.0, 2.0} for attention-based methods
-# - AttnRaw-v1/v2/v3
-# - SimpleAvg-v1/v2/v3 with only L sweep (no temperature)
-# - SGD and AdamW baselines
+# Unified gradient optimizer experiment matrix:
+# - SimpleAvg: true uniform average over K+1 gradient window
+# - AttnRaw: cosine attention over gradient window
+#   - include_g_t=True: g_t is part of attention window (G variants)
+#   - include_g_t=False: g_t blended separately via mix_beta (MIX variants)
 
 import itertools
 
@@ -26,90 +24,65 @@ RUNS["ADAMW"] = {
     "weight_decay": 0.1,
 }
 
-# --- Muon baseline ---
 RUNS["MUON"] = {
     "optimizer": "muon",
     "lr": 3e-4,
 }
 
-# --- AttnRaw-v1: keep both m_{t-1} and v_{t-1} ---
-for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
-    key = f"ATTNRAW-V1-L{L}-T{tau}"
+# --- SimpleAvg: true uniform average over K+1 gradient window (no EMA on numerator) ---
+for L in HISTORY_LENGTHS:
+    key = f"SIMPLEAVG-L{L}"
     RUNS[key] = {
-        "optimizer": "attnraw_v1",
+        "optimizer": "simpleavg",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attn_config": {
+        "grad_opt_config": {
             "context_length": L,
-            "mix_beta": 0.9,
+        },
+    }
+
+# --- AttnRaw: g_t IN attention window (softmax over K+1 items) ---
+for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
+    key = f"ATTNRAW-G-L{L}-T{tau}"
+    RUNS[key] = {
+        "optimizer": "attnraw",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "grad_opt_config": {
+            "context_length": L,
+            "include_g_t": True,
             "temperature": tau,
         },
     }
 
-# --- AttnRaw-v2: remove m_{t-1}, keep v_{t-1} ---
+# --- AttnRaw: g_t NOT in attention window (forced blend) ---
 for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
-    key = f"ATTNRAW-V2-L{L}-T{tau}"
+    key = f"ATTNRAW-L{L}-T{tau}"
     RUNS[key] = {
-        "optimizer": "attnraw_v2",
+        "optimizer": "attnraw",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "attn_config": {
+        "grad_opt_config": {
             "context_length": L,
-            "mix_beta": 0.9,
+            "include_g_t": False,
             "temperature": tau,
-        },
-    }
-
-# --- AttnRaw-v3: remove both m_{t-1} and v_{t-1} ---
-for L, tau in itertools.product(HISTORY_LENGTHS, TEMPERATURES):
-    key = f"ATTNRAW-V3-L{L}-T{tau}"
-    RUNS[key] = {
-        "optimizer": "attnraw_v3",
-        "lr": 3e-4,
-        "weight_decay": 0.0,
-        "attn_config": {
-            "context_length": L,
-            "mix_beta": 0.9,
-            "temperature": tau,
-        },
-    }
-
-# --- SimpleAvg-v1: keep both m_{t-1} and v_{t-1} ---
-for L in HISTORY_LENGTHS:
-    key = f"AVG-V1-L{L}"
-    RUNS[key] = {
-        "optimizer": "simpleavg_v1",
-        "lr": 3e-4,
-        "weight_decay": 0.0,
-        "avg_config": {
-            "context_length": L,
             "mix_beta": 0.9,
         },
     }
 
-# --- SimpleAvg-v2: remove m_{t-1}, keep v_{t-1} ---
-for L in HISTORY_LENGTHS:
-    key = f"AVG-V2-L{L}"
+# --- AttnRaw: g_t NOT in window, mix_beta sweep (L=4, T=1.0) ---
+MIX_BETAS = [0.9, 0.75, 0.5, 0.25, 0.1]
+for mix_beta in MIX_BETAS:
+    key = f"ATTNRAW-MIX{int(mix_beta * 100):02d}-L4-T1.0"
     RUNS[key] = {
-        "optimizer": "simpleavg_v2",
+        "optimizer": "attnraw",
         "lr": 3e-4,
         "weight_decay": 0.0,
-        "avg_config": {
-            "context_length": L,
-            "mix_beta": 0.9,
-        },
-    }
-
-# --- SimpleAvg-v3: remove both m_{t-1} and v_{t-1} ---
-for L in HISTORY_LENGTHS:
-    key = f"AVG-V3-L{L}"
-    RUNS[key] = {
-        "optimizer": "simpleavg_v3",
-        "lr": 3e-4,
-        "weight_decay": 0.0,
-        "avg_config": {
-            "context_length": L,
-            "mix_beta": 0.9,
+        "grad_opt_config": {
+            "context_length": 4,
+            "include_g_t": False,
+            "temperature": 1.0,
+            "mix_beta": mix_beta,
         },
     }
 

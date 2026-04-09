@@ -1,19 +1,30 @@
 #
-# AttnRaw V2: Raw cosine attention, no first-moment EMA.
+# AttnRaw: Cosine attention over gradient window.
 #
-# Uses cosine similarity in raw gradient space for attention:
-#   s_i = cos(g_t, g_{t-i})
+# If include_g_t=True:
+#   window = [g_t, g_{t-1}, ..., g_{t-K}]  (K+1 items)
+#   scores = cos_sim(g_t, each_item)
+#   alpha = softmax(scores / T)
+#   g_bar = alpha @ window
 #
-# Attention scores computed in raw space, then applied to gradients.
-# Only v_{t-1} is retained; m_{t-1} is replaced by the attention mixture.
+# If include_g_t=False:
+#   past = [g_{t-1}, ..., g_{t-K}]  (K items)
+#   scores = cos_sim(g_t, each_past)
+#   alpha = softmax(scores / T)
+#   attended = alpha @ past
+#   g_bar = mix_beta * g_t + (1 - mix_beta) * attended
+#
+# Second moment uses EMA for normalization.
+# No EMA on first moment — g_bar is used directly.
+#
 
 import torch
 from torch.optim import Optimizer
 
 
-class AttnRawV2(Optimizer):
+class AttnRaw(Optimizer):
     """
-    AttnRaw V2: raw cosine attention, no first-moment EMA.
+    Cosine attention over gradient window with configurable options.
 
     Args:
         params:         model parameters
@@ -21,9 +32,13 @@ class AttnRawV2(Optimizer):
         betas:          (beta2,) — EMA decay for second moment only
         eps:            numerical stability term
         weight_decay:   decoupled weight decay
-        context_length: number of past gradients to attend over
-        mix_beta:       weight assigned to attended past gradients
+        context_length: number of PAST gradients to store (K)
+                         If include_g_t=True, window is K+1 items
+        include_g_t:    if True, g_t is part of attention window
+                         if False, g_t is blended separately via mix_beta
         temperature:    softmax temperature for attention scores
+        mix_beta:       weight on current gradient when include_g_t=False
+                         g_bar = mix * g_t + (1-mix) * attended_past
     """
 
     def __init__(
@@ -34,15 +49,16 @@ class AttnRawV2(Optimizer):
         eps=1e-8,
         weight_decay=0.0,
         context_length=8,
-        mix_beta=0.9,
+        include_g_t=True,
         temperature=1.0,
+        mix_beta=0.9,
     ):
         if context_length < 1:
             raise ValueError("context_length must be >= 1")
-        if not 0.0 < mix_beta <= 1.0:
-            raise ValueError("mix_beta must be in (0, 1]")
         if temperature <= 0:
             raise ValueError("temperature must be positive")
+        if not 0.0 < mix_beta <= 1.0:
+            raise ValueError("mix_beta must be in (0, 1]")
 
         defaults = dict(
             lr=lr,
@@ -50,8 +66,9 @@ class AttnRawV2(Optimizer):
             eps=eps,
             weight_decay=weight_decay,
             context_length=context_length,
-            mix_beta=mix_beta,
+            include_g_t=include_g_t,
             temperature=temperature,
+            mix_beta=mix_beta,
         )
         super().__init__(params, defaults)
 
@@ -61,19 +78,19 @@ class AttnRawV2(Optimizer):
         state["exp_avg_sq"] = torch.zeros_like(p, dtype=torch.float32)
         state["grad_history"] = []
 
-    def _compute_past_mix(
+    def _compute_attention(
         self,
         g_flat: torch.Tensor,
-        history: torch.Tensor,
+        window: torch.Tensor,
         temperature: float,
     ) -> torch.Tensor:
-        """Cosine attention in raw space."""
-        current_norm = g_flat.norm().clamp(min=1e-8)
-        history_norms = history.norm(dim=1).clamp(min=1e-8)
-        scores = history @ g_flat
-        scores = scores / (history_norms * current_norm)
+        """Cosine attention over window."""
+        g_norm = g_flat.norm().clamp(min=1e-8)
+        window_norms = window.norm(dim=1).clamp(min=1e-8)
+        scores = window @ g_flat
+        scores = scores / (window_norms * g_norm)
         alpha = torch.softmax(scores / temperature, dim=0)
-        return alpha @ history
+        return alpha @ window
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -88,8 +105,9 @@ class AttnRawV2(Optimizer):
             eps = group["eps"]
             wd = group["weight_decay"]
             K = group["context_length"]
-            mix_beta = group["mix_beta"]
+            include_g_t = group["include_g_t"]
             temperature = group["temperature"]
+            mix_beta = group["mix_beta"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -105,18 +123,23 @@ class AttnRawV2(Optimizer):
                 state["step"] += 1
                 t = state["step"]
 
-                history_list = state["grad_history"][:K]
-                if history_list:
-                    history = torch.stack(history_list, dim=0)
-                    m_past = self._compute_past_mix(g_flat, history, temperature)
-                    m_t_flat = mix_beta * g_flat + (1.0 - mix_beta) * m_past
-                else:
-                    m_t_flat = g_flat
+                past = state["grad_history"][:K]
 
-                m_t = m_t_flat.reshape_as(p)
+                if include_g_t:
+                    window = torch.stack([g_flat] + past, dim=0)
+                    g_bar_flat = self._compute_attention(g_flat, window, temperature)
+                else:
+                    if past:
+                        history = torch.stack(past, dim=0)
+                        attended = self._compute_attention(g_flat, history, temperature)
+                        g_bar_flat = mix_beta * g_flat + (1.0 - mix_beta) * attended
+                    else:
+                        g_bar_flat = g_flat
+
+                g_bar = g_bar_flat.reshape_as(p)
 
                 v = state["exp_avg_sq"]
-                v.mul_(beta2).addcmul_(m_t, m_t, value=1.0 - beta2)
+                v.mul_(beta2).addcmul_(g_bar, g_bar, value=1.0 - beta2)
                 v_hat = v / (1.0 - beta2**t)
 
                 state["grad_history"] = (
@@ -127,7 +150,7 @@ class AttnRawV2(Optimizer):
                     p.mul_(1.0 - lr * wd)
 
                 p.addcdiv_(
-                    m_t.to(p.dtype),
+                    g_bar.to(p.dtype),
                     v_hat.sqrt().add_(eps),
                     value=-lr,
                 )
