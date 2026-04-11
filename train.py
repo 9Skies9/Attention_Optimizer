@@ -228,7 +228,7 @@ def train(
     run_cfg = RUNS[run_id]
     tcfg = dict(TRAIN_CONFIG)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    os.environ.setdefault("FINEWEB_MAX_SHARDS", "10")
+    os.environ.setdefault("FINEWEB_MAX_SHARDS", "20")
 
     env_max_steps = os.environ.get("MAX_STEPS")
     env_max_tokens = os.environ.get("MAX_TOKENS")

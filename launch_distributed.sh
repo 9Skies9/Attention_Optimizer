@@ -86,14 +86,14 @@ echo ""
 # Define runs
 # -------------------------------------------------------------------
 RUNS=(
-    "ATTNRAW-G-L4-T0.5"
-    "ATTNRAW-G-L4-T1.0"
-    "ATTNRAW-G-L4-T2.0"
+    "ATTNRAW-V1-G-L4-T0.5"
+    "ATTNRAW-V1-G-L4"
+    "ATTNRAW-V1-G-L4-T2.0"
     "ATTNRAW-MIX90-L4-T1.0"
     "ATTNRAW-MIX75-L4-T1.0"
     "ATTNRAW-MIX50-L4-T1.0"
     "ATTNRAW-MIX25-L4-T1.0"
-    "ATTNRAW-MIX10-L4-T1.0"
+    "ATTNRAW-V1-L4-MIX10"
     "SIMPLEAVG-L4"
 )
 
@@ -256,7 +256,7 @@ worker() {
         
         # Run the experiment with a timeout safety net
         # If it crashes, we'll catch it and mark appropriately
-        if python train.py --run_id "$run"; then
+        if CUDA_VISIBLE_DEVICES=$gpu_id python train.py --run_id "$run"; then
             result=0
         else
             result=$?

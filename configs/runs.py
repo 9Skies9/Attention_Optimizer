@@ -62,6 +62,57 @@ RUNS = {
             "mix_beta": 0.9,
         },
     },
+    "ATTNRAW-V1-G-L4-T2.0": {
+        "optimizer": "attnraw_v1_g",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "grad_opt_config": {
+            "context_length": 4,
+            "temperature": 2.0,
+            "mix_beta": 0.9,
+        },
+    },
+    # --- MIX variants: g_t blended separately via mix_beta ---
+    "ATTNRAW-MIX90-L4-T1.0": {
+        "optimizer": "attnraw_v1_g",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "grad_opt_config": {
+            "context_length": 4,
+            "temperature": 1.0,
+            "mix_beta": 0.9,
+        },
+    },
+    "ATTNRAW-MIX75-L4-T1.0": {
+        "optimizer": "attnraw_v1_g",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "grad_opt_config": {
+            "context_length": 4,
+            "temperature": 1.0,
+            "mix_beta": 0.75,
+        },
+    },
+    "ATTNRAW-MIX50-L4-T1.0": {
+        "optimizer": "attnraw_v1_g",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "grad_opt_config": {
+            "context_length": 4,
+            "temperature": 1.0,
+            "mix_beta": 0.5,
+        },
+    },
+    "ATTNRAW-MIX25-L4-T1.0": {
+        "optimizer": "attnraw_v1_g",
+        "lr": 3e-4,
+        "weight_decay": 0.0,
+        "grad_opt_config": {
+            "context_length": 4,
+            "temperature": 1.0,
+            "mix_beta": 0.25,
+        },
+    },
     # --- AttnRaw V2: g_t in window + EMA on first moment ---
     "ATTNRAW-V2-L4": {
         "optimizer": "attnraw_v2",
